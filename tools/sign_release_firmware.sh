@@ -73,5 +73,6 @@ python3 "$repository_root/tools/check_firmware_size.py" \
     "$signed_image" \
     --partition-size 3145728 \
     --maximum-used-percent 75
+chmod 0644 "$signed_image"
 
 echo "Signed release firmware verified against keys/smoker_ota_signing_public.pem"
