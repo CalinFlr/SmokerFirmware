@@ -1,7 +1,8 @@
 # M13 OTA HTTPS and Rollback Plan
 
-Status: **Software implementation, build/browser validation, and signed KFB003
-USB migration complete; GitHub OTA/rollback scenarios pending**
+Status: **Complete for the defined M13 software and connected-target scope:
+signed USB migration, public GitHub OTA, both-slot boot, rollback, and final
+validation passed on KFB003**
 
 ## Goal
 
@@ -36,7 +37,8 @@ flash writes outside the critical `ControlTask` dependency chain.
 - no M6B/M7-M10 sensing, SSR, persistence, or power-recovery implementation;
 - no claim that host, browser, cross-build, or simulated-I/O evidence validates
   real sensors, SSR behavior, thermal safety, or independent electrical safety;
-- no release tag creation or push.
+- release publication is operational completion evidence, not part of the
+  firmware implementation itself.
 
 ## Current repository observations
 
@@ -62,7 +64,7 @@ flash writes outside the critical `ControlTask` dependency chain.
 - the first M12-to-M13 deployment is a complete serial flash because M12 cannot
   migrate its own partition table;
 - target rollback and release-download evidence requires a connected KFB003 and
-  published release, and will remain explicitly pending when unavailable.
+  published release; both were available for the final completion run.
 
 ## Steps
 
@@ -102,8 +104,9 @@ git diff --check
 - GitHub reachability, DNS, correct wall time, and CA validation may fail while
   local smoking control must continue normally;
 - a complete partition-table migration necessarily needs serial flashing;
-- the target scenario needs a temporary `0.12.99` image and the published
-  `0.13.0` asset to prove both-slot installation and rollback;
+- the completed target scenario used a temporary signed `0.12.99` bootstrap
+  image and the published `0.13.0` asset to prove both-slot installation and
+  rollback;
 - Secure Boot and flash encryption remain required for protection against
   physical flash replacement but are intentionally outside M13.
 - loss of the private OTA key requires a new serial trust anchor on every
@@ -158,11 +161,11 @@ returns firmware-check admission from fixed storage; and scopes the command
 admission guardrail to the real `handle_command()` body instead of the first
 OTA mailbox use.
 
-No board was flashed and no tag or GitHub Release was created. Therefore live
-SNTP/GitHub/TLS behavior, preserved NVS after the required full serial
-migration, install from both slots, five-cycle mark-valid, forced
-`PENDING_VERIFY` rollback, real-radio isolation, sensors, SSR, and electrical
-safety remain unverified target/hardware behavior.
+At that implementation-review point no board had been flashed and no tag or
+GitHub Release had been created, so no target behavior was claimed by that
+review. The later connected-target completion evidence is recorded below.
+Real-radio failure isolation, sensors, SSR, and electrical safety remain
+separate M12/M6B-M8 evidence and are not claimed by M13.
 
 The signed-OTA review remediation enables ESP-IDF's RSA-3072 signed-app
 verification during updates without enabling hardware Secure Boot. Ordinary
@@ -238,6 +241,36 @@ The private-repository CI was rejected before runner assignment by account
 billing. D052 replaces that distribution boundary with the public canonical
 repository: a sanitized working-tree snapshot becomes its single root commit,
 the historical repository remains a private archive, and the device needs no
-GitHub token. Do not create `v0.13.0` until public CI is green; the published
-OTA, `ota_1`, five-cycle mark-valid, forced pending-image reset, rollback, and
-final reinstall remain open evidence gates.
+GitHub token. At D052 adoption, publication, `ota_1`, five-cycle mark-valid,
+forced pending-image reset, rollback, and final reinstall remained open gates.
+
+Final connected-target and release validation on 2026-08-18 closed those M13
+gates:
+
+- public CI passed host guardrails and the ESP-IDF `v6.0.2` cross-build before
+  protected-main integration;
+- the tag-restricted release workflow built and RSA-signed `v0.13.0`; anonymous
+  `latest/download` returned a 1,249,280-byte image with SHA-256
+  `b511934ec354392ba6ee20e4b687d6e3e765e9722a0e2c3cdf5fafc7f559e91b`,
+  valid against `keys/smoker_ota_signing_public.pem`, with ESP32-S3 chip ID 9,
+  application version `0.13.0`, and ESP-IDF `v6.0.2` metadata;
+- the first target check exposed an ESP-IDF request-TX exhaustion after GitHub
+  redirected to a 923-character signed asset URL. The observed GET request line
+  required 893 bytes while the default TX buffer was 512 bytes. The reviewed
+  fix uses a guarded 4,096-byte TX buffer and the repaired `0.12.99` target then
+  reported the public `0.13.0` release as `AVAILABLE`;
+- the signed USB helper installed the repaired `0.12.99` bootstrap in `ota_0`
+  without writing NVS, and every serial write hash verified;
+- OTA installed `0.13.0` into `ota_1`. A reset immediately after its first boot
+  and before the five-cycle validation completed caused the next boot to return
+  to `0.12.99` in `ota_0`, with simulated heater command `0.0%`;
+- a second OTA installation booted `0.13.0`, logged successful validation after
+  five safe control cycles, and a later controlled reboot remained on `ota_1`
+  with simulated heater command `0.0%`;
+- the authenticated firmware API subsequently reported `IDLE`, current version
+  `0.13.0`, no available version, and no error.
+
+SSID, station IP, MAC address, and native-USB identifiers are deliberately
+excluded from repository evidence. This completion proves the defined M13
+software/release/target path only; it does not prove real sensing, SSR output,
+thermal behavior, or independent electrical safety.

@@ -541,8 +541,11 @@ Wi-Fi provisioning, local HTTP/UI, and M13 OTA software are present. No display,
 session/power-recovery persistence, real SSR, real temperature frontend, fan,
 smoke generator, or cloud has been added. No physical heater or hardware-safety
 behavior has been tested by the simulation/build/unit tests. The signed M13 USB
-migration and preserved-state boot passed on KFB003. Published-release download,
-both-slot boot, mark-valid, and rollback remain target-pending.
+migration, credential-free public-release download, both-slot boot, forced
+pending-image rollback, clean reinstall, five-cycle mark-valid, and persistent
+reboot passed on KFB003. The observed simulated heater command remained `0.0%`;
+this is OTA-path evidence, not a sensor, SSR, thermal, or independent
+hardware-safety test.
 
 The controller product baseline cannot be considered complete before M6B and
 M7-M10 identify and integrate the remaining real hardware and implement

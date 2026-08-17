@@ -24,9 +24,10 @@ A future item is **not permission to implement it early**.
 - **M12 — Wi-Fi + local API/UI:** implemented for the simulated controller and
   host/cross-build validated; physical radio/provisioning/runtime validation on
   the final KFB003 board remains required before M12 is complete.
-- **M13 — OTA + rollback:** software implemented, cross-build validated, and
-  signed USB migration passed on KFB003; live GitHub OTA install/rollback
-  remains pending.
+- **M13 — OTA + rollback:** complete for its defined scope. Signed USB
+  migration, public GitHub OTA into the second slot, forced pending-image
+  rollback, clean reinstall, five-cycle validation, and persistent reboot
+  passed on KFB003.
 - **M14-M15 — history/cloud capabilities:** future independent milestones;
   they are not implied by M12/M13 implementation.
 
@@ -373,8 +374,8 @@ failure, iPhone/radio edge scenarios, or hardware safety.
 
 ## M13 — OTA + rollback
 
-Status: **Software complete — host/build/browser and signed KFB003 USB
-migration pass; GitHub OTA install/rollback scenario pending.**
+Status: **Complete for the defined M13 scope — host/build/browser, signed USB
+migration, public GitHub OTA, rollback, and final target validation pass.**
 
 Implemented in software:
 
@@ -405,8 +406,9 @@ status while autonomous local control continues; firmware check admission uses
 a fixed response and performs no post-admission JSON allocation.
 
 Host, sanitizer, HTTP/browser, guardrail, and ESP-IDF cross-build evidence cover
-the software boundary. The documented KFB003 two-slot installation and rollback
-scenario remains target-pending and must not be inferred from those results.
+the software boundary. Separate connected-target evidence now covers the
+documented KFB003 two-slot installation and rollback scenario; neither class of
+evidence is a hardware-safety test.
 The first M12 migration requires a complete serial flash through the signed
 serial helper; ordinary unsigned `idf.py flash` output is not bootable under
 the M13 signed-update bootloader. D051 records the single-maintainer condition
@@ -422,8 +424,27 @@ ControlTask on core 1, and simulated heater `0%`. Pre/post read-only NVS audits
 had valid page CRCs and identical logical key/value CRCs; the saved STA then
 reconnected at `[REDACTED_STA_IP]`. An authenticated firmware check validated the
 GitHub TLS certificate and failed closed on HTTP `404`, as expected before a
-release exists. This closes first serial migration and preserved-state evidence,
-not the still-pending published install, `ota_1`, mark-valid, or rollback gates.
+release existed. This closed the first serial migration and preserved-state
+evidence; the later release scenario below closes the remaining M13 gates.
+
+On 2026-08-18 public protected-main CI passed and the tag-restricted workflow
+published the RSA-verified `v0.13.0` application. Anonymous download produced a
+1,249,280-byte ESP32-S3/ESP-IDF 6.0.2 image with SHA-256
+`b511934ec354392ba6ee20e4b687d6e3e765e9722a0e2c3cdf5fafc7f559e91b`.
+The initial target attempt revealed that GitHub's real redirect expanded to a
+923-character URL and an 893-byte request line, exceeding ESP-IDF's default
+512-byte TX buffer. After a reviewed, guarded 4,096-byte request-buffer fix, a
+signed `0.12.99` bootstrap installed through the USB helper successfully found
+`0.13.0` and OTA wrote it to `ota_1`.
+
+A forced reset during the first `PENDING_VERIFY` boot returned the board to
+`0.12.99` in `ota_0`. A second installation booted `0.13.0`, marked it valid
+after five safe ControlTask cycles, and remained on `ota_1` after another
+controlled reboot. The simulated heater command was `0.0%` at the observed
+rollback and persistent boots, and the final firmware API was `IDLE` with no
+error. Repository evidence omits SSID, IP, MAC, and native-USB identifiers.
+This completes M13's OTA/rollback scope without making any sensor, SSR,
+thermal, Secure Boot, flash-encryption, or independent electrical-safety claim.
 
 ## M14 — Telemetry/history
 
