@@ -753,7 +753,8 @@ def check_m12_transport_contract(failures: CheckFailures) -> None:
         and "esp_http_client_set_redirection" in ota
         and "maximum_redirects" in ota
         and "configuration.buffer_size_tx" in ota
-        and "http_request_buffer_size > maximum_redirect_location_length + 16U" in ota
+        and "maximum_http_request_line_overhead" in ota
+        and "std::numeric_limits<int>::max()" in ota
         and "MonotonicDeadline" in ota
         and "permission_timeout_microseconds" in ota
         and "check_timeout_microseconds" in ota

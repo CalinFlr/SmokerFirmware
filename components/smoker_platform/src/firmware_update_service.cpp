@@ -47,6 +47,7 @@ constexpr std::int64_t install_timeout_microseconds = 5LL * 60LL * 1000LL * 1000
 constexpr std::uint32_t required_validation_cycles = 5U;
 constexpr int maximum_http_wait_milliseconds = 5'000;
 constexpr std::size_t maximum_redirect_location_length = 2048U;
+constexpr std::size_t maximum_http_request_line_overhead = 16U;
 constexpr std::size_t http_request_buffer_size = 4096U;
 constexpr std::size_t download_buffer_size = 4096U;
 constexpr std::uint32_t maximum_redirects = 5U;
@@ -67,7 +68,16 @@ static_assert(ota_task_stack_size_bytes % sizeof(StackType_t) == 0U);
 static_assert(sizeof(esp_image_header_t) == firmware_image_header_size);
 static_assert(sizeof(esp_image_segment_header_t) == firmware_segment_header_size);
 static_assert(sizeof(esp_app_desc_t) == firmware_app_descriptor_size);
-static_assert(http_request_buffer_size > maximum_redirect_location_length + 16U);
+static_assert(
+    http_request_buffer_size
+        >= maximum_redirect_location_length + maximum_http_request_line_overhead,
+    "OTA TX buffer must fit an accepted redirect plus GET/protocol framing"
+);
+static_assert(
+    http_request_buffer_size
+        <= static_cast<std::size_t>(std::numeric_limits<int>::max()),
+    "ESP HTTP client TX buffer size must fit its int configuration field"
+);
 static_assert(offsetof(esp_image_header_t, chip_id) == 12U);
 static_assert(offsetof(esp_app_desc_t, version) == 16U);
 static_assert(offsetof(esp_app_desc_t, project_name) == 48U);
