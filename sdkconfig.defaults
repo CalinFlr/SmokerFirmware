@@ -1,0 +1,38 @@
+# M6A N16R8 baseline: user-reported variant and target storage readback agree.
+CONFIG_IDF_TARGET="esp32s3"
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+
+# M13 uses two explicit 3 MiB application slots on the target-confirmed 16 MiB
+# flash. The first deployment from M12 requires a complete serial flash because
+# the old single-app image cannot migrate its own partition table.
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_PARTITION_TABLE_FILENAME="partitions.csv"
+
+# ESP-IDF integrated HTTPS OTA trust, signed-app verification during OTA, and
+# rollback support. Release images are signed outside the ordinary build so the
+# private RSA-3072 key never enters the repository or normal CI jobs. Hardware
+# Secure Boot, eFuse provisioning, flash encryption, and physical-flash attack
+# resistance are not claimed by M13.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y
+CONFIG_SECURE_SIGNED_APPS_NO_SECURE_BOOT=y
+CONFIG_SECURE_SIGNED_APPS_RSA_SCHEME=y
+CONFIG_SECURE_SIGNED_ON_UPDATE_NO_SECURE_BOOT=y
+# CONFIG_SECURE_BOOT_BUILD_SIGNED_BINARIES is not set
+
+# M12 keeps radio, TCP/IP, timers, and HTTP work on core 0. The one critical
+# ControlTask is explicitly pinned to core 1 in smoker_platform.
+CONFIG_ESP_WIFI_TASK_PINNED_TO_CORE_0=y
+CONFIG_LWIP_TCPIP_TASK_AFFINITY_CPU0=y
+CONFIG_ESP_TIMER_TASK_AFFINITY_CPU0=y
+
+# The single critical control loop is subscribed at runtime. A stall triggers
+# a panic/reset; every reset reconstructs the application with heater OFF.
+CONFIG_ESP_TASK_WDT_INIT=y
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=5
+CONFIG_ESP_TASK_WDT_PANIC=y
