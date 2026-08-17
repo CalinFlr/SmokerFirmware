@@ -47,6 +47,7 @@ constexpr std::int64_t install_timeout_microseconds = 5LL * 60LL * 1000LL * 1000
 constexpr std::uint32_t required_validation_cycles = 5U;
 constexpr int maximum_http_wait_milliseconds = 5'000;
 constexpr std::size_t maximum_redirect_location_length = 2048U;
+constexpr std::size_t http_request_buffer_size = 4096U;
 constexpr std::size_t download_buffer_size = 4096U;
 constexpr std::uint32_t maximum_redirects = 5U;
 constexpr std::time_t minimum_trusted_wall_time = 1'700'000'000;
@@ -66,6 +67,7 @@ static_assert(ota_task_stack_size_bytes % sizeof(StackType_t) == 0U);
 static_assert(sizeof(esp_image_header_t) == firmware_image_header_size);
 static_assert(sizeof(esp_image_segment_header_t) == firmware_segment_header_size);
 static_assert(sizeof(esp_app_desc_t) == firmware_app_descriptor_size);
+static_assert(http_request_buffer_size > maximum_redirect_location_length + 16U);
 static_assert(offsetof(esp_image_header_t, chip_id) == 12U);
 static_assert(offsetof(esp_app_desc_t, version) == 16U);
 static_assert(offsetof(esp_app_desc_t, project_name) == 48U);
@@ -174,6 +176,7 @@ esp_http_client_config_t make_http_configuration(RedirectCapture& redirects) noe
     configuration.user_data = &redirects;
     configuration.crt_bundle_attach = esp_crt_bundle_attach;
     configuration.timeout_ms = maximum_http_wait_milliseconds;
+    configuration.buffer_size_tx = static_cast<int>(http_request_buffer_size);
     configuration.disable_auto_redirect = true;
     configuration.keep_alive_enable = true;
     configuration.max_redirection_count = static_cast<int>(maximum_redirects);
