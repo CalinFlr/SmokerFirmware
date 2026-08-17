@@ -1,0 +1,751 @@
+# Architecture Decision Log
+
+Only accepted decisions are listed here.
+
+## D001 — Native ESP-IDF
+
+Use native ESP-IDF rather than PlatformIO.
+
+Status: Accepted.
+
+## D002 — Pin ESP-IDF baseline
+
+Start from ESP-IDF `v6.0.2`.
+
+Do not silently move to another IDF release.
+
+Both direct CMake configuration and the verification entrypoint reject any
+version other than exactly `6.0.2`.
+
+Status: Accepted.
+
+## D003 — Target ESP32-S3 family
+
+The firmware targets ESP32-S3.
+
+M6A records the final controller as the SuooTci `KFB003` ESP32-S3 board with
+the user-reported N16R8 module variant. Carrier evidence comes from the user's
+procurement identity and listing photographs; storage facts are independently
+confirmed from target readback.
+
+Status: Accepted.
+
+## D004 — C++ application/domain code
+
+Use strict C++20, without GNU language extensions, for project-owned host and
+ESP-IDF C++ sources. Use ESP-IDF APIs for platform/system integration.
+
+Status: Accepted.
+
+## D005 — Thin composition root
+
+`main/app_main.cpp` is a thin bootstrap/composition layer.
+
+Status: Accepted.
+
+## D006 — Three logical components
+
+Use:
+
+- `smoker_core`
+- `smoker_app`
+- `smoker_platform`
+
+Status: Accepted.
+
+## D007 — Pure core
+
+`smoker_core` is platform-independent and has no ESP-IDF/hardware dependency.
+
+Status: Accepted.
+
+## D008 — Application owns hardware ports
+
+Hardware/application ports belong to `smoker_app`.
+
+`smoker_platform` provides concrete ESP-IDF/hardware implementations.
+
+Status: Accepted.
+
+## D009 — Single runtime-state writer
+
+`SmokerApplication` is the only writer of mutable runtime state.
+
+External actors use commands.
+
+Status: Accepted.
+
+## D010 — Snapshot-based reads
+
+UI/network consumers use snapshots/events rather than mutable state references.
+
+Status: Accepted.
+
+## D011 — One critical V0 ControlTask
+
+V0 uses one critical control task rather than independent PID/sensor/timer/safety tasks.
+
+Status: Accepted.
+
+## D012 — Synchronous safety gate
+
+Safety is evaluated in the same critical control cycle before final heater output is written.
+
+Status: Accepted.
+
+## D013 — Host-first core tests
+
+Primary domain/business tests run natively on the development machine.
+
+ESP32 target tests cover integration/platform behavior.
+
+Status: Accepted.
+
+## D014 — No premature scaffolding
+
+Future roadmap capabilities must not be implemented/scaffolded without an explicit milestone/task.
+
+Status: Accepted.
+
+## D015 — Food probes are monitoring/alarm inputs
+
+Food probes never participate in chamber heater control.
+
+They may trigger alarms/events/timer-start conditions.
+
+A probe-threshold timer waits while the selected probe is disabled or has no
+valid reading. A later enabled/reconnected sample may trigger it.
+
+Status: Accepted.
+
+## D016 — Single-stage V0
+
+Recipe architecture is stage-oriented, but V0 implements exactly one stage.
+
+Status: Accepted.
+
+## D017 — Preheat/Hold are not domain states
+
+Preheat, cook, keep-warm, etc. are stage configurations/names, not special V0 session states.
+
+Status: Accepted.
+
+## D018 — No separate food-safety engine
+
+Recipes contain user-selected process parameters.
+
+The controller does not certify food safety.
+
+Status: Accepted.
+
+## D019 — Configurable power-loss recovery
+
+`resumeAfterPowerFailure` is a user-configurable device setting.
+
+Status: Accepted.
+
+## D020 — No fan/smoke-generator control yet
+
+These are future/undecided capabilities and must not be implemented in V0.
+
+Status: Accepted.
+
+## D021 — OTA outside core
+
+OTA belongs to application/platform layers and must not become a control-loop dependency.
+
+Status: Accepted.
+
+## D022 — No OTA install while running
+
+Update installation/reboot is forbidden while a cooking session is running.
+
+Status: Accepted.
+
+## D023 — OTA rollback required
+
+The eventual partition/update strategy must support rollback and new-image validation.
+
+Status: Accepted.
+
+## D024 — Hardware inventory deferred
+
+Hardware facts are recorded only from available identified hardware. The
+available controller board, including flash/PSRAM and pin restrictions, is M6A
+work. External sensor/probe interfaces, SSR/power design, final external pin
+assignments, and independent safety hardware remain deferred to M6B until those
+components/design facts are available.
+
+Device-specific probe capacity is decided at M9. Persisted-input bounds for
+probe collections, names/recipes, and timer values are decided and enforced at
+M10. No such values are invented in M5 or hard-coded in `smoker_core`.
+
+Status: Accepted.
+
+## D025 — Distinguish simulated slice from product V0
+
+M0-M5 are the completed V0 simulated application/control slice. They do not
+constitute a real-device or product-V0 completion claim.
+
+The controller product baseline cannot be complete before the M6A/M6B and
+M7-M10 hardware, real I/O, persistence, and recovery work.
+Connectivity/display/OTA remain their separate later milestones.
+
+Status: Accepted.
+
+## D026 — M5 command queue has one owner and reserved Stop admission
+
+`SmokerApplication::submit()` is single-owner/ControlTask-only in M5 and is not
+thread-safe. The bounded queue reserves one slot for Stop, coalesces a
+consecutive trailing Stop, and makes regular-command overflow observable.
+
+Its Boolean return value reports queue admission/coalescing only. Semantic
+validation and `CommandRejected` happen later in the owning control cycle.
+
+Cross-task command transport is introduced only when an external producer is
+implemented.
+
+Status: Accepted.
+
+## D027 — Probe defaults and session settings are separate
+
+Device/default probe configuration remains immutable during a session. Live
+probe commands mutate only active-session settings, and a new Start restores
+the configured defaults.
+
+Persistence of defaults and recovery of session settings remain M10 work.
+
+Status: Accepted.
+
+## D028 — Alarm acknowledgement and resolution are independent
+
+Acknowledgement records user attention. Resolution records that the alarm is no
+longer active because its condition/session lifecycle ended. Active snapshots
+contain unresolved alarms, whether acknowledged or not.
+
+Probe alarms are derived only while `RUNNING`; reconnect resolves disconnect,
+and session termination resolves session alarms.
+
+Status: Accepted.
+
+## D029 — Raw input acquisition precedes derived side effects
+
+The M5 cycle acquires raw inputs without emitting probe events/alarms, processes
+commands, and only then derives probe state. This makes Stop, target changes,
+and alarm/probe disables deterministic in the same cycle while retaining a
+current chamber sample for safety/fault-clear decisions.
+
+Status: Accepted.
+
+## D030 — Duration and monotonic time point are distinct
+
+Use `std::chrono::milliseconds` for `Duration` and a tagged
+`std::chrono::time_point` for `MonotonicTimePoint`. They must not be aliases of
+the same type.
+
+Status: Accepted.
+
+## D031 — Manual Stop is an observable control-cycle barrier
+
+When a valid `StopSession` is processed, command draining ends for that tick.
+Later queued commands retain FIFO order and become eligible on the next tick.
+This guarantees a final safety-gated OFF write before any explicit subsequent
+Start can return the controller to RUNNING.
+
+Status: Accepted.
+
+## D032 — P0 architecture constraints are executable
+
+The M0-M5 layer graph, critical control ownership, V0 scope, and requirements
+traceability are checked by dependency-free repository scripts and CI. These
+structural checks complement behavior tests and cross-builds; they do not claim
+runtime or electrical proof.
+
+Status: Accepted.
+
+## D033 — Stop coalescing preserves FIFO command intent
+
+Only a Stop that is already the newest pending command may absorb another Stop.
+Any intervening command ends the coalescing run, so a later Stop is admitted as
+a distinct FIFO intent using the reserved slot.
+
+This preserves both consecutive-Stop deduplication and the meaning of sequences
+such as `Stop -> Start -> Stop`, where discarding the final Stop could otherwise
+leave the controller RUNNING despite reporting that Stop as accepted.
+
+Status: Accepted.
+
+## D034 — Split controller-board and external-hardware identification
+
+The original combined hardware-identification milestone is split into:
+
+- M6A for the available ESP32-S3 controller board, its integrated capabilities,
+  storage facts, and target-runtime validation;
+- M6B for external chamber/probe frontends, SSR/heater interface, power design,
+  and independent safety hardware that are not yet available.
+
+M12 controller-board connectivity work and M13 partition work may depend on
+M6A without claiming M6B completion. M7-M9 each require the corresponding M6B
+interface facts before real hardware integration.
+
+This split changes scheduling and dependency gates only. It does not identify a
+board, invent hardware facts, or constitute target/electrical validation.
+
+Status: Accepted.
+
+## D035 — SuooTci KFB003 N16R8 is the final controller board
+
+The final smoker controller uses the SuooTci ESP32-S3 board sold as code
+`KFB003` / eMAG product `D1T7M22BM`, with the N16R8 storage variant. The
+carrier's product photographs and silkscreen provide the header/USB/component
+inventory, while Espressif module/SoC documentation governs electrical pin
+restrictions.
+
+The seller title's “34 pins” conflicts with photographs showing 44 header
+positions, and one generic slide's 8 MB flash claim conflicts with the 16 MB
+title and target readback. The project therefore records the photographed
+silkscreen explicitly, relies on target readback for storage, and does not treat
+inconsistent marketing artwork as a pinout. GPIO35-37 remain unavailable because
+the target-confirmed R8 Octal PSRAM takes precedence over exposed carrier labels.
+
+Status: Accepted.
+
+## D036 — M12 uses bounded one-way cross-task transports
+
+The single ESP HTTP task produces commands into a 16-entry SPSC mailbox; the
+single `ControlTask` consumes them and remains the only production caller of
+`SmokerApplication::submit()`. The transport preserves a Stop slot and FIFO
+intent. Cross-core Stops are never coalesced because determining whether a
+trailing Stop is still pending races with the consumer; each accepted Stop owns
+an entry. Snapshot reads use a preallocated triple exchange with atomic read
+leases; the critical publisher drops rather than waiting when no non-current
+slot is free.
+
+`ControlTask` remains priority 2 with a static 12 KiB stack and moves to core 1.
+HTTP, Wi-Fi, TCP/IP, default events, and fallback timer work run on core 0.
+
+Status: Accepted.
+
+## D037 — M12 local credentials are a transitional tradeoff
+
+This decision records the initial M12 implementation: an open SoftAP and the
+shared device password `smoker257500`. D045 reinstates the fixed initial HTTP
+password and D046 reinstates the open SoftAP. The remaining browser session shape is retained: a public, data-free form at
+`/login` asks only for the device password and includes an accessible show/hide control. It creates
+a random 256-bit `HttpOnly`, `SameSite=Lax` cookie whose server-side idle
+timeout is 30 minutes; `Lax` permits the top-level CNA login redirect while
+exact-Origin checks remain mandatory for protected mutations. Dashboard/data
+routes require this session. HTTP Basic
+with user `admin` remains supported only as the API-client credential shape. An
+optional replacement is persisted with STA credentials, invalidates the web
+session, and the UI warns while the initial password is active.
+
+M12 has no TLS and NVS encryption is not enabled, so form/Basic credentials and
+the bearer cookie remain visible to another client on the same LAN, while stored
+credentials are plaintext at rest. No route returns secrets, no API bypasses
+safety, and NVS errors never trigger an automatic partition erase.
+
+Status: Credential behavior reinstated by D045 and D046; HTTP hardening remains accepted.
+
+## D038 — M12 UI is embedded and polling-based
+
+Use embedded vanilla Romanian HTML/CSS/JavaScript with Celsius values, no CDN,
+npm runtime, WebSocket, or SSE. The browser self-schedules immutable snapshot
+requests after the previous request completes, without replacing a focused or
+dirty target input; keyed probe updates keep live readings moving while an
+input is focused. Only the data-free login
+page and its stylesheet and show/hide script are public; dashboard/data routes
+are authenticated. Protected routes are same-origin, non-cacheable, and carry a
+restrictive CSP and defensive headers. The login POST accepts captive-assistant
+Origin quirks but still needs the correct device password. JSON bodies are
+limited to 512 bytes and reject duplicate or unknown fields. Socket receive
+timeouts have a finite retry budget and every body has a ten-second wall-clock
+deadline, so a stalled or byte-dribbling client cannot occupy
+the single HTTP task indefinitely.
+
+All routes accept only the active AP address, current STA address, or device
+`.local` hostname in `Host`. Exact-Origin checks therefore cannot be satisfied
+by reflecting an attacker-controlled rebound Host.
+
+Status: Accepted.
+
+## D039 — M12 registry dependencies are limited and locked
+
+Use `espressif/cjson` 1.7.19 for JSON and `espressif/mdns` 1.8.2 for
+display-independent local discovery. Their hashes and the ESP-IDF 6.0.2
+dependency are committed in `dependencies.lock`; generated
+`managed_components/` remains ignored. M12 does not add OTA partitions or an
+installer; it uses ESP-IDF's built-in 1500 KiB single-app layout until M13.
+
+Status: Accepted.
+
+## D040 — M12 adopts Fumuri visually without a web runtime
+
+Use `/Users/floreacalin/Developer/Fumuri` as a read-only visual reference. The
+embedded page transfers the canonical Jar, Jar profund, Salvie, Auriu, Hârtie,
+and Cărbune tokens and the established light/dark surfaces, but implements only
+real M12 capabilities in vanilla HTML/CSS/JavaScript with system fonts.
+
+No React, Next.js, Tailwind, npm dependency, remote font, CDN, or fictional
+cloud/Bluetooth/OTA/history/multi-stage/manual-heater feature enters firmware.
+
+Status: Accepted.
+
+## D041 — Wi-Fi discovery is asynchronous, bounded, and public-data-only
+
+Authenticated same-origin `POST`/`GET /api/v1/network/scan` routes control an
+asynchronous scan. Repeated starts coalesce. Hidden networks are omitted;
+visible SSIDs are UTF-8/control-byte sanitized, deduplicated by strongest RSSI,
+sorted strongest first, and capped at 20. Responses expose only SSID, RSSI,
+channel, and security category.
+
+Firmware-owned scan/result storage is fixed and preallocated. Scan suppresses
+STA reconnect and resumes it after completion or a 15-second recovery timeout;
+it never enters the application command transport or the control cycle. Scan
+results explicitly mark only OPEN, WPA2, and WPA3 Personal as selectable.
+
+Status: Accepted.
+
+## D042 — Captive discovery is a fail-soft SoftAP-only service
+
+SoftAP advertises `http://192.168.4.1/` through DHCP option 114. A responder
+adapted from the ESP-IDF 6.0.2 captive-portal DNS example uses one static 4 KiB
+task pinned to core 0 and binds only the SoftAP address. It is the sole auxiliary
+network task allowed by the V0 guardrails and stops with the AP. Its static
+task storage is not reused until the old worker has signalled exit, suspended,
+and been deleted by the core-0 owner.
+
+Unknown paths and registered unauthenticated page routes receive a non-empty
+redirect to the absolute, data-free `http://192.168.4.1/login` form while AP is
+active instead of retaining a probe host such as `captive.apple.com` or
+returning an API-style JSON `401`. The login form itself is never served for a
+foreign Host. STA-only redirects remain local instead of targeting the inactive
+AP address. Because iOS CNA may
+retain the probe Origin after that redirect, only the public password-verified
+login POST accepts it; protected writes retain exact same-origin validation.
+DNS/DHCP failure leaves manual `192.168.4.1` access available and cannot alter
+control state, heater demand, timers, or safety.
+
+The 30-second SoftAP fallback is anchored to the start of a disconnected
+period; repeated STA authentication failures cannot postpone it. Wi-Fi mode
+changes are serialized, fallback rechecks connectivity after acquiring that
+serialization boundary, and a failed STA-only transition is retried until
+`GOT_IP` converges to AP disabled. Runtime configuration errors remain logged
+and preserve AP recovery instead of falsely claiming reconnection. `AP_STOP`
+arms recovery when STA is still disconnected, transient fallback-enable errors
+schedule a new bounded attempt, and scan completion rechecks configuration
+inside the Wi-Fi-mode lock before restoring AP-only. Immediate STA connect
+errors use an ESP timer retry; a STA startup error falls back to AP recovery and
+fails connectivity startup only when that recovery also fails. Provisioning
+marks its configuration transition before persistence, keeps the mode lock
+through commit/application, and makes `GOT_IP` validate the currently
+associated SSID. An event from a previous attempt therefore cannot close the AP
+before the new attempt is installed.
+
+STA reconnect retries track one in-flight driver admission. Accepted connects
+cancel stale timers, ordinary disconnects reopen admission, and a credential
+change lets its intentional disconnect event initiate the new connect, avoiding
+overlapping driver calls.
+
+Status: Accepted.
+
+## D043 — M12 commissioning credentials are unique and rate-limited
+
+Replace the shared HTTP default and open provisioning link with two generated,
+persisted credentials: a WPA2 SoftAP password and an HTTP device password.
+ESP-IDF's hardware random source generates 16-character credentials. First-boot
+and legacy-default migration values are exposed through the physical serial
+commissioning channel; the HTTP value is no longer logged after the device is
+claimed. Changing the HTTP password does not silently change the SoftAP key.
+Manufacturing may preload both values with the claimed marker to suppress
+serial disclosure; label/injection operations remain outside this firmware
+decision and are required before consumer shipment.
+
+Login failures use a fixed four-peer IPv4 table. The fifth failure starts a
+30-second block with bounded exponential backoff, a successful login clears the
+peer, and stale failures reset. Cookie-authenticated state changes require an
+explicit exact Origin. HTTP Basic clients may omit Origin, but cannot supply a
+foreign one. HTTP remains plaintext and NVS remains unencrypted in M12, so this
+does not claim protection against a hostile same-LAN client or flash access.
+
+Status: Accepted in part; D045 supersedes generated HTTP credentials and D046
+supersedes WPA2 SoftAP. Rate limiting and Origin policy remain accepted.
+
+## D044 — M12 browser admission is correlated and resource growth is bounded
+
+HTTP `202` is transport admission, not semantic success. A 32-bit correlation
+ID crosses the SPSC mailbox and `SmokerApplication`, then a bounded immutable
+snapshot result reports semantic acceptance or rejection. The UI waits for
+that result. Mailbox sequencing uses 32-bit atomics so ESP32-S3 does not invoke
+global-lock-backed 64-bit atomic load/store helpers in the ControlTask path.
+
+Browser polling is completion-scheduled with a request timeout, probe DOM rows
+are updated by identity, cJSON construction fails with `503` on any allocation
+failure, and Wi-Fi scans have a 15-second recovery timeout. The build uses
+ESP-IDF's built-in 1500 KiB single-app layout and rejects images above 75% of
+that slot. This is a pre-OTA growth guard, not the M13 rollback layout.
+
+Status: Accepted.
+
+## D045 — The initial HTTP password is the fixed product default
+
+Every new device and every device whose HTTP credential is still marked
+initial uses `smoker257500` for the login form and HTTP Basic user `admin`.
+At the time of this decision the WPA2 SoftAP key remained separate and unique;
+D046 later supersedes that link-layer behavior. D045 does not weaken rate limiting, session cookies,
+Host/Origin validation, strict request parsing, or protected-route access.
+
+An owner-supplied HTTP password stored during provisioning marks the device
+claimed and is preserved. Firmware migration replaces a generated credential
+that is still marked initial with `smoker257500`, but never overwrites a claimed
+custom password.
+
+This shared, publicly documented default prioritizes simple onboarding. The
+accepted consequence is that a nearby AP client or same-LAN client can
+authenticate if the owner has not replaced it; HTTP and NVS also remain
+unencrypted in M12. Reviewers must retain and report this product decision.
+Changing the fixed initial value or returning to per-device HTTP generation
+requires a new explicit product decision rather than an incidental security
+remediation.
+
+Status: Accepted; supersedes the generated-HTTP-password portion of D043.
+
+## D046 — The commissioning SoftAP is intentionally open
+
+`Smoker-<MAC6>` uses ESP-IDF `WIFI_AUTH_OPEN` and has no Wi-Fi password.
+Firmware does not generate, persist, or disclose an AP key. The fixed HTTP
+password `smoker257500` remains required before dashboard or API access; login
+rate limiting, random session cookies, Host/Origin validation, strict parsing,
+and control-safety isolation remain unchanged. STA provisioning still supports
+the approved security types of the selected home network.
+
+This decision prioritizes familiar low-friction IoT onboarding. The accepted
+consequence is that anyone in radio range can associate with the AP, observe or
+modify plaintext HTTP traffic, trigger captive endpoints, and attempt the
+publicly documented shared login. HTTP authentication is not link encryption
+and does not protect an associated client from traffic interception.
+
+Reviewers must retain and report this product decision. Adding WPA2, generating
+an AP key, or otherwise requiring a Wi-Fi password requires a new explicit
+product decision rather than an incidental security remediation.
+
+Status: Accepted; supersedes the WPA2 SoftAP portion of D043 and the remaining
+link-layer supersession in D037.
+
+## D047 — SoftAP is commissioning-only and LAN auth is password-to-session
+
+The intentionally open `Smoker-<MAC6>` SoftAP is a commissioning surface only.
+Requests accepted on local address `192.168.4.1` may load the public Wi-Fi setup
+page, read provisioning status, scan visible networks, and save STA credentials.
+They may never load login/dashboard assets, snapshots, cooking state, or
+commands, even when a valid session cookie is supplied. The request's local
+socket address determines this scope before Host validation and authentication;
+an unknown local address is rejected fail-closed.
+
+Operational access is available only through the current STA IPv4 or device
+`.local` authority on a socket whose local address is the current STA address.
+There are no users or roles. `POST /api/v1/auth/session` accepts only the device
+password and replaces the single random 256-bit session token in an `HttpOnly`,
+`SameSite=Lax`, `Path=/` cookie. The idle timeout remains 30 minutes. Logout and
+device-password replacement invalidate the token; password replacement is a
+separate authenticated operation requiring current and new passwords.
+
+HTTP Basic and the `admin` identity are removed completely. Authorization
+Basic/Bearer headers never grant access, unauthenticated APIs return JSON `401`
+without `WWW-Authenticate`, and all authenticated/provisioning writes require
+the exact device Origin. No token is exposed to JavaScript or stored in browser
+storage.
+
+STA configuration accepts exactly `ssid` and `wifi_password`, requires an
+8..63-character password, marks only WPA2/WPA3 Personal scan results supported,
+and configures the driver with WPA2 as the minimum authentication threshold.
+STA OPEN, WEP, WPA1, and Enterprise are not supported. The SoftAP itself remains
+open under D046; D047 changes its application scope, not its link security.
+
+Captive DHCP/DNS and unknown AP paths canonicalize to
+`http://192.168.4.1/`. On successful STA association the AP closes and the
+commissioning page directs the owner to the `.local` hostname. Wi-Fi-loss
+fallback may reopen the same setup-only AP while `ControlTask` continues
+autonomously.
+
+HTTP and NVS remain unencrypted in M12. WPA protects the supported STA radio
+link but does not provide end-to-end HTTP encryption. This decision does not
+claim physical radio, SSR, thermal, electrical, or independent-safety testing.
+
+Status: Accepted; supersedes AP dashboard/login access in D037/D042/D046,
+HTTP Basic/admin in D037/D043/D045, and STA OPEN support in D041.
+
+## D048 — M12 credential groups use atomic versioned NVS blobs
+
+Wi-Fi configuration (`ssid` plus `wifi_password`) and device authentication
+(`device_password` plus the initial/claimed marker) remain separate persistence
+concerns. Each concern is stored in one fixed-size, versioned NVS blob so an
+individual update cannot expose a new field paired with a stale companion
+field. Existing M12 per-field keys are read only for a one-time, non-erasing
+boot migration; once present, the blob is authoritative.
+
+The migration preserves existing STA and claimed-password state. An invalid or
+unreadable authoritative blob fails connectivity initialization without erasing
+NVS or falling back to potentially stale legacy fields. Local control continues
+independently with heating initialized OFF.
+
+The dual-stack HTTP listener also normalizes IPv4-mapped peers before applying
+the accepted per-IPv4-peer login limiter. HTTP error envelopes are built in
+fixed bounded storage so cJSON allocation failure does not immediately invoke a
+second throwing allocation on the exception-disabled target.
+
+Status: Accepted.
+
+## D049 — M12 review boundaries fail closed before external effects
+
+Operational HTTP is unavailable while the open commissioning SoftAP is marked
+active, even when STA already has an IPv4 address. ESP-IDF's lwIP receive path
+may accept a packet on one netif when its destination matches another configured
+local netif; therefore the accepted socket's STA-local address is not sufficient
+proof of protected-LAN ingress during APSTA overlap. Once `AP_STOP` confirms the
+commissioning surface is inactive, normal STA operational access resumes.
+
+Legacy authentication migration uses `smoker257500` only for a genuinely
+missing or explicitly unclaimed state. Any NVS read error, corrupt legacy value,
+invalid claim marker, or claimed marker without a valid password fails
+connectivity initialization without writing an authoritative replacement blob.
+
+The allocation-free command-admission JSON is completed before publishing a
+command to the cross-task mailbox. No local JSON allocation/serialization
+failure may return `503` after admission. Network delivery can still fail after
+publication and remains reconciled through bounded command results where the
+client has received the ID. Direct application Stop IDs that coalesce are
+resolved only after the queued Stop is processed and all inherit its actual
+semantic result.
+
+These changes retain D045's fixed initial password, D046's open SoftAP, D047's
+commissioning-only intent, and the existing safety gate.
+
+Status: Accepted.
+
+## D050 — M13 uses manual fixed-source HTTPS OTA with application-owned permission
+
+M13 publishes version `0.13.0` and accepts firmware only from the fixed public
+GitHub Releases asset
+`https://github.com/CalinFlr/SmokerFirmware/releases/latest/download/smoker_controller.bin`.
+The device performs no automatic checks, arbitrary-URL downloads, LAN uploads,
+downgrades, or reinstalls. It uses ESP-IDF's HTTPS HTTP client and native OTA
+write/verification APIs, certificate bundle, SNTP, application rollback, and
+the M6A-confirmed 16 MiB flash. Automatic redirects are disabled: at most five
+manually followed hops are accepted and every hop must retain TLS. The real ESP
+image header supplies the chip ID used for pre-install admission. Check and
+install have total monotonic deadlines of 30 seconds and five minutes;
+application permission expires after ten seconds.
+
+All M13 application images use ESP-IDF Secure Boot v2 RSA-3072 signature blocks
+with `CONFIG_SECURE_SIGNED_APPS_NO_SECURE_BOOT` and update-time verification.
+The currently running signed application supplies the trusted public-key
+digest; therefore the first full-serial M13 image and every later OTA image must
+use the same key. Ordinary builds are padded but unsigned and receive no
+private material. The tag-restricted `firmware-release` environment supplies the
+base64-encoded private key only to a dedicated signing step; that step verifies
+the output against the repository public key before GitHub publication. The
+private key is ignored locally and must have an encrypted backup. SHA-256 is a
+corruption/transparency aid, not publisher authentication. Hardware Secure
+Boot, eFuse provisioning, and flash encryption remain explicitly outside M13,
+so physical/flash-write attackers can replace the software trust anchor.
+
+Availability checks are read-only and may run during `RUNNING`. Installation
+first obtains correlated permission through `PrepareFirmwareUpdateCommand` and
+is allowed only in `IDLE`, `STOPPED`, or `FAULT`. While permission or first-boot
+validation is active, `SmokerApplication` rejects Start. Completion or failure
+uses the internal `FinishFirmwareUpdateCommand`; HTTP and `OtaTask` never call
+`SmokerApplication::submit()` directly.
+
+Prepare and Finish use dedicated bounded atomic signals to `ControlTask`, not
+the HTTP command mailbox. Prepare is submitted first and retried if the
+application FIFO is full; Finish is held until that submission succeeds. This
+keeps a permission timeout from overtaking its reservation under queued Stop
+traffic. Once admitted, the application FIFO preserves their order.
+
+One static low-priority `OtaTask` on core 0 owns time synchronization, HTTPS,
+flash writing, and rollback APIs and is not subscribed to TWDT. Its 16 KiB
+stack and task control block reside explicitly in internal DRAM because PSRAM
+is unavailable while the flash cache is disabled. A newly booted
+`PENDING_VERIFY` image is marked valid only after ControlTask is subscribed to
+TWDT and reports five consecutive safe cycles: `IDLE`, valid authoritative
+chamber input, no fault, heater OFF, and successful TWDT reset. A fault,
+ten-second timeout, mark-valid failure, runtime-context allocation failure, or
+ControlTask/OtaTask creation failure rolls back and reboots. Network state does
+not participate in that validation. Outside pending validation, failure to
+create `OtaTask` leaves autonomous control running but makes firmware status
+explicitly `FAILED` and rejects new check/install requests.
+
+Firmware routes exist only on the authenticated STA surface. Browser writes
+require the exact Origin. Safe authenticated GET accepts the browser's normal
+absence of an `Origin` header, but rejects a supplied foreign Origin; Host and
+socket-scope checks still apply before authentication. This preserves D047's
+HTTP security boundary while making the firmware status GET usable by a
+same-origin browser. Firmware-check admission returns a prebuilt fixed response
+instead of allocating JSON after the operation has started.
+
+The first M12-to-M13 deployment requires a complete serial flash because the
+M12 single-app image cannot migrate its own partition table. Host tests and
+cross-builds do not prove live GitHub download, both-slot boot, rollback,
+sensors, SSR behavior, or electrical safety; those target scenarios remain
+explicit evidence gates.
+
+ESP-IDF still generates ordinary serial targets for the intentionally unsigned
+developer build. M13 makes `flash`, `app-flash`, `bootloader-flash`,
+`partition-table-flash`, and `otadata-flash` depend on an unconditional
+fail-closed guard. This prevents a standard build from installing an unsigned
+application or a partial new boot layout. USB installation uses only the
+signed-image helper; `erase-flash` remains a separate, explicit recovery
+operation.
+
+Status: Accepted.
+
+## D051 — Missing independent release review is conditional on single-maintainer access
+
+The project currently has only one maintainer, so the `firmware-release`
+environment has no independent reviewer. Public repository visibility or an
+available reviewer feature does not manufacture independent approval.
+Repository and tag-write access are currently limited to that maintainer, so
+the absence of a second reviewer is accepted as a P3 operational hardening risk
+rather than an M13 release blocker. This access fact is maintainer-reported and
+must not be inferred or claimed from source-tree checks alone.
+
+The residual risk is explicit: compromise of that maintainer's account, token,
+or workstation could change tag-referenced code and invoke the signing job with
+the environment secret. Tag filtering does not provide independent approval.
+The maintainer must retain strong account MFA/passkeys, least-privilege and
+short-lived credentials where available, deliberate tag creation, and the
+encrypted offline signing-key backup required by D050.
+
+This decision is valid only while no additional human or automation can write
+repository content or create/move matching release tags. Before granting either
+capability, or before the next release if that condition has changed, the
+release boundary must be reopened and moved to an independent reviewer,
+offline signer, or separately controlled KMS/workflow. Agents must report this
+condition during future OTA/release security reviews; they must not silently
+treat the current single-maintainer exception as a general design approval.
+
+Status: Accepted with single-maintainer condition.
+
+## D052 — Public canonical repository begins from one sanitized root commit
+
+The canonical source and release repository is public so an uncredentialed
+controller can download the fixed GitHub Release asset. A private repository
+would return `404` to the device unless a GitHub access credential were stored
+on it; M13 rejects that credential lifecycle and extraction risk. Repository
+visibility controls access to bytes, not firmware authenticity. ESP-IDF's
+RSA-3072 signed-update verification remains the publisher trust boundary.
+
+The former repository is renamed and retained as a private evidence archive.
+The public repository receives a sanitized working-tree snapshot through a new
+Git repository containing exactly one root commit; historical objects, pull
+request refs, real STA identifiers, unique device identifiers, and local port
+identifiers are not pushed. Future public commits form the canonical history.
+
+Ordinary commits run unsigned CI. Only an explicit `v*.*.*` tag matching
+`version.txt` may enter the `firmware-release` environment, use its signing
+secret, verify the result against the versioned public key, and publish the
+signed binary and SHA-256. Public visibility must never turn every commit into
+an automatically signed release.
+
+Status: Accepted.

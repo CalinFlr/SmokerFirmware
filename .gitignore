@@ -1,0 +1,23 @@
+# Project-local ESP-IDF checkout and downloaded toolchains.
+.tools/
+
+# Generated build and configuration files.
+/build*/
+/managed_components/
+/log/
+/output/playwright/
+/.playwright-cli/
+__pycache__/
+sdkconfig
+sdkconfig.old
+
+# Maintainer-only signing material. Public verification keys belong in keys/;
+# private keys and their encoded copies must stay outside version control.
+/local-secrets/
+*.private.pem
+*.private.pem.b64
+/smoker_controller.bin
+/smoker_controller.bin.sha256
+
+# Local OS metadata.
+.DS_Store

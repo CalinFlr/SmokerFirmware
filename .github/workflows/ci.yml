@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  host:
+    name: Host tests and guardrails
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Install Ninja
+        run: sudo apt-get update && sudo apt-get install --yes ninja-build
+      - name: Verify host behavior, sanitizers, and architecture
+        run: bash tools/verify.sh --host-only
+
+  esp-idf:
+    name: ESP-IDF v6.0.2 cross-build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Build ESP32-S3 firmware
+        uses: espressif/esp-idf-ci-action@e6f5c74232b1ccd4c97ed641f1e48553853f1fd5 # v1.2.0
+        with:
+          esp_idf_version: v6.0.2
+          target: esp32s3
+          path: .
+          command: bash tools/verify.sh --idf-only
