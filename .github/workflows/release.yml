@@ -50,6 +50,7 @@ jobs:
           esp_idf_version: v6.0.2
           target: esp32s3
           path: .
+          extra_docker_args: --env SMOKER_OTA_SIGNING_KEY_B64
           command: bash tools/sign_release_firmware.sh
       - name: Package release assets
         shell: bash

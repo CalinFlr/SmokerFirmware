@@ -798,6 +798,7 @@ def check_m12_transport_contract(failures: CheckFailures) -> None:
         and 'test "$GITHUB_REF_NAME" = "v$version"' in release
         and "environment: firmware-release" in release
         and "secrets.SMOKER_OTA_SIGNING_KEY_B64" in release
+        and "extra_docker_args: --env SMOKER_OTA_SIGNING_KEY_B64" in release
         and "tools/sign_release_firmware.sh" in release
         and "cp build-verify/smoker_controller.bin" not in release
         and "gh release create" in release
