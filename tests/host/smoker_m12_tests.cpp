@@ -504,7 +504,9 @@ void test_wifi_scan_curation(TestContext& context)
     records[5].rssi_dbm = -39;
     records[5].channel = 4U;
     for (std::size_t index = 6U; index < records.size(); ++index) {
-        char ssid[16]{};
+        // Large enough even for the full decimal representation of size_t;
+        // this keeps the fixture valid under GCC's -Wformat-truncation check.
+        char ssid[32]{};
         std::snprintf(ssid, sizeof(ssid), "Network-%02zu", index);
         records[index] = raw_network(
             ssid,
