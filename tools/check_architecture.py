@@ -563,7 +563,8 @@ def check_m12_transport_contract(failures: CheckFailures) -> None:
         and "check_effective_sdkconfig.py" in release_signing
         and "secure-sign-data" in release_signing
         and "secure-verify-signature" in release_signing
-        and 'rm -f "$signing_key"' in release_signing,
+        and 'rm -f "$signing_key"' in release_signing
+        and 'chmod 0644 "$signed_image"' in release_signing,
         "M13 release signing must isolate the private key and verify against the public key",
     )
     for setting in (
