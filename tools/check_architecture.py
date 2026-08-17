@@ -565,7 +565,7 @@ def check_m12_transport_contract(failures: CheckFailures) -> None:
         and "secure-verify-signature" in release_signing
         and 'rm -f "$signing_key"' in release_signing
         and 'chmod 0644 "$signed_image"' in release_signing,
-        "M13 release signing must isolate the private key and verify against the public key",
+        "M13 release signing must isolate the private key, verify against the public key, and publish a readable artifact",
     )
     for setting in (
         "CONFIG_PARTITION_TABLE_CUSTOM",
