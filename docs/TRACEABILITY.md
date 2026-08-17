@@ -1,7 +1,7 @@
 # M0-M13 Requirements Traceability
 
-Status: **M13 software implemented; physical connectivity and OTA/rollback
-validation pending**
+Status: **M13 software and defined OTA/rollback target validation complete;
+M12 radio edge cases and external-hardware safety remain pending**
 
 This matrix separates implementation status from validation strength. A rule is
 not considered target- or hardware-validated merely because host tests or an
@@ -105,17 +105,17 @@ Test names below refer to functions in `tests/host/smoker_core_tests.cpp`,
 ## OTA rules
 
 M13 implements the software OTA boundary with simulated-I/O and cross-build
-evidence. Live GitHub download, two-slot boot, mark-valid, and rollback remain
-target-pending on KFB003.
+evidence. A connected KFB003 additionally passed anonymous public-release
+download, two-slot boot, mark-valid, forced rollback, and final reinstall.
 
 | Rule | Milestone/status | Implementation evidence | Test/evidence | Validation |
 |---|---|---|---|---|
 | OTA-001 | M13 implemented | OTA helpers/service remain in `smoker_platform`; app owns only internal permission commands and interlock; core has no OTA/platform include | `test_semantic_versions_and_descriptors`; `tools/check_architecture.py` layer checks | H-pass, B-pass, Guardrail |
-| OTA-002 | M13 implemented | immutable snapshot admission plus correlated Prepare rejects RUNNING; dedicated atomic Prepare is ordered before Finish so timeout cannot orphan a delayed reservation; Start is blocked while update active | `test_application_update_permission` Stop/Prepare/Finish FIFO regression, `test_update_coordinator`; source guardrail | H-pass, B-pass, Guardrail; T-pending live install |
-| OTA-003 | M13 implemented | manual image-prefix check is independent of application reservation; real chip ID/project/version admission, HTTPS-only bounded redirects, total deadlines, non-RUNNING install permission, and ESP-IDF RSA-3072 signed-update verification are enforced; the public fixed source requires no device credential, while release signing is isolated from ordinary CI and checked against the versioned public key; D051 makes the missing independent reviewer conditional on sole-maintainer repository/tag control | `test_application_update_permission`, `test_semantic_versions_and_descriptors`, `test_image_metadata_and_deadlines`, `test_update_coordinator`; effective-Kconfig/signing/serial source guardrails | H-pass, B-pass, Guardrail; T-pending live signed/tampered install, redirect, and timeout |
-| OTA-004 | M13 implemented | exact custom table has `otadata` and equal `ota_0`/`ota_1` 3 MiB slots within confirmed 16 MiB flash; rollback config enabled; signed serial preflight rejects stale configuration, unsigned/build-mismatched apps, and mismatched generated layouts; ordinary unsigned/partial ESP-IDF flash targets fail closed | `test_update_coordinator`; `tools/check_effective_sdkconfig.py`, `tools/flash_signed_firmware.py --check-only`, `tools/check_partitions.py`, blocked ESP-IDF flash-target validation, ESP-IDF partition output; signed KFB003 USB migration with pre/post logical NVS audit | H-pass, B-pass, Guardrail; T-pass first serial migration/preserved state, T-pending two-slot rollback |
-| OTA-005 | M13 implemented | `PENDING_VERIFY` blocks Start; five safe TWDT-reset cycles mark valid; fault/10 s/mark error or runtime-context/ControlTask/OtaTask bootstrap failure invokes rollback reboot | `test_application_update_permission`; `tools/check_architecture.py` pending-bootstrap source guardrail | H-pass, B-pass, Guardrail; T-pending mark-valid/rollback |
-| OTA-006 | M13 implemented | static low-priority core-0 OtaTask owns bounded SNTP/HTTPS/flash operations and is outside TWDT; its stack/TCB are internal-DRAM objects, not part of the PSRAM-eligible heap service; ControlTask exchanges ordered bounded atomic signals/snapshots only; unavailable worker reports `FAILED` and rejects work | `test_image_metadata_and_deadlines`, `test_update_coordinator`; `tools/check_architecture.py` task-placement/order/availability checks | H-pass, B-pass, Guardrail; T-pending Wi-Fi-loss install |
+| OTA-002 | M13 implemented | immutable snapshot admission plus correlated Prepare rejects RUNNING; dedicated atomic Prepare is ordered before Finish so timeout cannot orphan a delayed reservation; Start is blocked while update active | `test_application_update_permission` Stop/Prepare/Finish FIFO regression, `test_update_coordinator`; source guardrail; stopped-session public-release install on KFB003 | H-pass, B-pass, Guardrail; T-pass stopped-session install path |
+| OTA-003 | M13 implemented | manual image-prefix check is independent of application reservation; real chip ID/project/version admission, HTTPS-only bounded redirects, guarded 4,096-byte request TX buffer, total deadlines, non-RUNNING install permission, and ESP-IDF RSA-3072 signed-update verification are enforced; the public fixed source requires no device credential, while release signing is isolated from ordinary CI and checked against the versioned public key; D051 makes the missing independent reviewer conditional on sole-maintainer repository/tag control | `test_application_update_permission`, `test_semantic_versions_and_descriptors`, `test_image_metadata_and_deadlines`, `test_update_coordinator`; effective-Kconfig/signing/serial source guardrails; anonymous `v0.13.0` download and real GitHub redirect on KFB003 | H-pass, B-pass, Guardrail; T-pass live signed image and redirect; live tamper/timeout not executed |
+| OTA-004 | M13 implemented | exact custom table has `otadata` and equal `ota_0`/`ota_1` 3 MiB slots within confirmed 16 MiB flash; rollback config enabled; signed serial preflight rejects stale configuration, unsigned/build-mismatched apps, and mismatched generated layouts; ordinary unsigned/partial ESP-IDF flash targets fail closed | `test_update_coordinator`; `tools/check_effective_sdkconfig.py`, `tools/flash_signed_firmware.py --check-only`, `tools/check_partitions.py`, blocked ESP-IDF flash-target validation, ESP-IDF partition output; signed KFB003 USB migration, `ota_0` to `ota_1` install, forced rollback, and final reinstall | H-pass, B-pass, Guardrail; T-pass USB migration and both-slot rollback path |
+| OTA-005 | M13 implemented | `PENDING_VERIFY` blocks Start; five safe TWDT-reset cycles mark valid; fault/10 s/mark error or runtime-context/ControlTask/OtaTask bootstrap failure invokes rollback reboot | `test_application_update_permission`; `tools/check_architecture.py` pending-bootstrap source guardrail; forced pending-image reset and clean reinstall on KFB003 | H-pass, B-pass, Guardrail; T-pass rollback and five-cycle mark-valid |
+| OTA-006 | M13 implemented | static low-priority core-0 OtaTask owns bounded SNTP/HTTPS/flash operations and is outside TWDT; its stack/TCB are internal-DRAM objects, not part of the PSRAM-eligible heap service; ControlTask exchanges ordered bounded atomic signals/snapshots only; unavailable worker reports `FAILED` and rejects work | `test_image_metadata_and_deadlines`, `test_update_coordinator`; `tools/check_architecture.py` task-placement/order/availability checks; live check/install on KFB003 | H-pass, B-pass, Guardrail; T-pass normal install; T-pending Wi-Fi-loss install |
 
 ## M5 command/runtime contracts added by review remediation
 
@@ -175,5 +175,7 @@ The following cannot be closed by M0-M5:
 - validate M12 AP/STA provisioning, automatic captive opening, real scan and
   hidden-SSID/wrong-password fallback, mDNS, authentication, Wi-Fi-loss
   isolation, ten-minute runtime, affinity/watermark, and TWDT on the final board;
-- validate M13 live GitHub check/install, both-slot boot, five-cycle mark-valid,
-  reset-during-`PENDING_VERIFY` rollback, and final reinstall on KFB003.
+- optional additional M13 resilience evidence may exercise a deliberately
+  tampered live asset, live operation timeout, and Wi-Fi loss during install;
+  the defined signed-release, both-slot, mark-valid, rollback, and reinstall
+  completion path has passed on KFB003.
