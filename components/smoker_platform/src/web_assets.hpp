@@ -659,6 +659,7 @@ async function loadHistorySamples() {
             after = page.continuation;
         } while (after !== null);
         if (loadToken !== historyLoadToken || requestedHistoryId !== selectedHistoryId) return;
+        collected.sort((left, right) => left.sequence - right.sequence);
         historyObservations = collected;
         drawHistoryChart();
         if (omittedSamples || omittedChanges) {

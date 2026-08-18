@@ -123,6 +123,10 @@ if ! "$playwright_cli" --session "$session" run-code "async (page) => {
             || historyObservations.length > historyPointBudget)) {
         throw new Error('dense lifecycle history did not reach END within the bounded chart');
     }
+    if (await page.evaluate(() => historyObservations.some((item, index, observations) =>
+            index > 0 && observations[index - 1].sequence > item.sequence))) {
+        throw new Error('bounded history observations are not chronological');
+    }
     if (!await page.locator('#history-session option:checked').textContent()
             .then(text => text.includes('încheiată'))) {
         throw new Error('active history did not refresh its terminal END');
