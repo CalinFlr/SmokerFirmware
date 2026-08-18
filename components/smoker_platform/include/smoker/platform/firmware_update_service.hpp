@@ -2,6 +2,7 @@
 
 #include "smoker/app/snapshot_exchange.hpp"
 #include "smoker/platform/firmware_update_support.hpp"
+#include "smoker/platform/flash_operation_coordinator.hpp"
 
 #include <cstdint>
 #include <memory>
@@ -25,7 +26,10 @@ void rollback_pending_firmware_and_reboot_if_needed() noexcept;
 
 class FirmwareUpdateService final {
 public:
-    explicit FirmwareUpdateService(const app::SnapshotExchange& snapshots) noexcept;
+    FirmwareUpdateService(
+        const app::SnapshotExchange& snapshots,
+        FlashOperationCoordinator& flash_operations
+    ) noexcept;
     ~FirmwareUpdateService();
 
     FirmwareUpdateService(const FirmwareUpdateService&) = delete;

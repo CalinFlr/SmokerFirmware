@@ -4,6 +4,7 @@
 #include "smoker/app/snapshot_exchange.hpp"
 #include "smoker/core/domain.hpp"
 #include "smoker/platform/firmware_update_service.hpp"
+#include "smoker/platform/history_service.hpp"
 
 #include <memory>
 
@@ -15,6 +16,7 @@ public:
         app::SpscCommandMailbox& command_mailbox,
         const app::SnapshotExchange& snapshots,
         FirmwareUpdateService& firmware_updates,
+        HistoryService& history,
         core::Recipe startup_recipe
     ) noexcept;
     ~LocalConnectivityService();

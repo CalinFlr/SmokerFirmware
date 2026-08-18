@@ -390,6 +390,7 @@ A read-only view for UI/network consumers may contain:
 
 ```text
 sessionStatus
+sessionElapsed
 chamberTemperature
 chamberTarget
 heaterDemand
@@ -417,6 +418,49 @@ it is true; Finish clears it. The platform OTA status is separately bounded:
 current/available versions, 0..100 progress, installation permission, a
 128-byte error, and exactly `IDLE`, `CHECKING`, `UP_TO_DATE`, `AVAILABLE`,
 `WAITING_PERMISSION`, `INSTALLING`, `REBOOTING`, `VALIDATING`, or `FAILED`.
+
+M14 adds monotonic `sessionElapsed` to both snapshot forms. The application
+computes it from session start and stop points; UTC is not part of application
+runtime state.
+
+## M15 Blynk remote projection
+
+M15 does not add cloud-owned domain/runtime state. `BlynkRemoteStatus` is a
+bounded platform projection derived by value from an immutable application
+snapshot plus the existing bounded platform firmware status. It contains only
+the user-visible fields configured as Blynk datastreams, including:
+
+```text
+session status and elapsed display value
+chamber current/target temperature
+normalized heater demand
+timer state/display value
+bounded probe readings/settings
+active-alarm summary
+optional fault code
+current/available firmware version
+OTA state/progress/error summary
+```
+
+Values are normalized to their Blynk display precision before equality is
+evaluated. The adapter retains exactly a `lastPublished` projection and a
+newest `pending` projection. A difference marks `pending` dirty; subsequent
+differences replace it. The dirty projection may publish only after the
+five-second minimum interval, then becomes `lastPublished`. If equality holds,
+time passage alone creates no new status message. Connect/reconnect explicitly
+publishes the newest current projection once.
+
+Correlated command results and critical events are separate bounded message
+types. They may be emitted immediately and are not fields whose delivery
+changes `lastPublished`. MQTT/Blynk delivery state is likewise not application
+runtime state.
+
+Blynk control datastreams represent live user gestures, not desired-state
+ownership. They map only to the existing external command set or to the
+existing M13 firmware check/install request. Start and OTA-install controls are
+never read back or synchronized after reconnect. A firmware request contains
+an operation and correlation identity only; it contains no URL, image, signing
+key, or heater command.
 
 ## Persistence groups
 
@@ -473,20 +517,39 @@ started timestamp
 probe session configuration
 ```
 
-### Telemetry
+### M14 durable session history
 
-Telemetry is separate from recovery state.
-
-Conceptual sample:
+History is separate from both device configuration and M10 recovery state. A
+history record is an immutable platform projection with:
 
 ```text
-timestamp
-chamber temperature
-chamber target
-heater demand
-probe temperatures
+kind: START | SAMPLE | CHANGE | END
+historyId: uint64 durable local identity
+sequence: uint32 within one stored session
+applicationSessionId
+session status and stop reason
+monotonic session elapsed
+optional Unix UTC seconds
+chamber current/target temperature
+normalized heater demand
+timer state
+probe readings and active-session settings
+active alarms
+optional fault code
 ```
 
-Permanent telemetry storage is not a V0 requirement.
+`historyId` is serialized to JSON as a decimal string so browser number
+precision cannot alter it. It is distinct from `SessionId`, which is application
+runtime identity and may restart after reboot.
 
-Do not write high-frequency telemetry to flash merely because the model exists.
+The list projection is `HistorySessionSummary`: start/end UTC when present,
+elapsed time, periodic-sample count, final status/stop reason, and explicit
+`active`, `interrupted`, and `truncated` flags. `HistoryHealth` exposes exactly
+`READY`, `DEGRADED`, or `FAILED` plus capacity/usage, mailbox-drop, corrupt-
+record, and write-error counters.
+
+Control publishes only while a session is active: immediate START/END and
+semantic-change records, plus periodic samples every 60 seconds while RUNNING.
+Repeated high-frequency periodic flash telemetry is forbidden. Storage is a
+bounded circular history, not a fixed-retention promise, and it cannot resume a
+session or change application state.

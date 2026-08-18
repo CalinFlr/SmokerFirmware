@@ -51,6 +51,8 @@ inline constexpr std::string_view index_html = R"HTML(<!doctype html>
 
 <div class="content-grid"><article class="card"><div class="card-title"><div><p class="eyebrow">MĂSURĂTORI</p><h3>Sonde alimentare</h3></div><span id="probe-count" class="count">0</span></div><div id="probes" class="probe-list"><p class="empty">Nicio sondă în snapshot.</p></div></article><article class="card"><div class="card-title"><div><p class="eyebrow">ATENȚIE</p><h3>Alarme și fault</h3></div><span class="ornament sage">!</span></div><div id="fault" class="fault-box ok">Niciun fault activ.</div><div id="alarms" class="alarm-list"><p class="empty">Nicio alarmă activă.</p></div></article></div></section>
 
+<section id="history-panel" class="network card history" aria-labelledby="history-title"><div class="section-heading"><div><p class="eyebrow">ISTORIC LOCAL · FLASH INTERN</p><h2 id="history-title">Sesiuni și telemetrie</h2><p class="muted">Mostre la 60 de secunde și schimbări importante. Timpul relativ rămâne disponibil fără Internet.</p></div><span id="history-pill" class="status-pill neutral"><i></i><span>Se încarcă</span></span></div><div class="history-toolbar"><label>Sesiune<select id="history-session" aria-label="Selectează sesiunea"><option value="">Nicio sesiune</option></select></label><p id="history-summary" class="muted">Istoricul se încarcă…</p></div><div id="history-warning" class="api-error hidden" role="status"></div><div class="history-chart-wrap"><canvas id="history-chart" width="900" height="330" aria-label="Grafic istoric temperatură și heater" role="img"></canvas><p id="history-empty" class="empty">Nu există încă date pentru afișare.</p></div><div class="history-legend" aria-label="Legendă"><span class="chamber">Cameră</span><span class="target">Țintă</span><span class="probe-series">Sondă aliment</span><span class="heater-series">Heater</span><span class="marker-series">Timer / alarmă / fault / final</span></div></section>
+
 <section id="network-panel" class="network card" aria-labelledby="network-title"><div class="section-heading"><div><p id="network-kicker" class="eyebrow">DISPOZITIV ȘI REȚEA</p><h2 id="network-title">Conectare Wi‑Fi</h2><p id="network-intro" class="muted">Alege o rețea WPA2/WPA3 Personal de 2,4 GHz sau introdu SSID-ul manual.</p></div><span id="network-pill" class="status-pill neutral"><i></i><span>Se încarcă</span></span></div><div class="network-grid"><div class="scan-column"><div class="subheading"><div><h3>Rețele disponibile</h3><p id="scan-summary" class="muted">Scanarea pornește automat.</p></div><button id="scan-again" class="secondary">Scanează din nou</button></div><div id="scan-error" class="api-error hidden" role="alert"></div><div id="networks" class="network-list" aria-live="polite"><div class="scan-placeholder"><i></i><span>Pregătim scanarea…</span></div></div></div><form id="network-form" class="provision-form"><div><p class="eyebrow">CONFIGURARE MANUALĂ DISPONIBILĂ</p><h3>Credentiale STA</h3></div><label>Numele rețelei (SSID)<span class="input-shell"><input id="ssid" maxlength="32" autocomplete="off" required></span></label><label>Parola WPA2/WPA3<span class="input-shell"><input id="wifi-password" type="password" minlength="8" maxlength="63" autocomplete="new-password" required></span></label><button class="primary">Salvează și conectează</button><small class="auth-note">Sunt acceptate numai WPA2/WPA3 Personal. Parolele nu sunt returnate de API.</small></form></div><footer class="device-strip"><div><small>STA</small><strong id="sta-state">Neconectat</strong></div><div><small>SOFTAP COMMISSIONING</small><strong id="ap-state">Se verifică</strong></div><div><small>ADRESĂ LOCALĂ</small><strong id="hostname">—</strong></div></footer></section>
 <section id="firmware-panel" class="network card firmware" aria-labelledby="firmware-title"><div class="section-heading"><div><p class="eyebrow">ACTUALIZARE MANUALĂ · HTTPS</p><h2 id="firmware-title">Actualizare firmware</h2><p class="muted">Verificarea folosește release-ul public Fumuri. Instalarea cere sesiunea oprită, repornește controlerul și poate întrerupe temporar această pagină.</p></div><span id="firmware-pill" class="status-pill neutral"><i></i><span>IDLE</span></span></div><div class="firmware-grid"><div class="firmware-versions"><div><small>VERSIUNE CURENTĂ</small><strong id="firmware-current">—</strong></div><div><small>VERSIUNE DISPONIBILĂ</small><strong id="firmware-available">—</strong></div></div><div><div class="firmware-progress" role="progressbar" aria-label="Progres actualizare" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i id="firmware-progress"></i></div><p id="firmware-state" class="muted">Actualizările automate sunt dezactivate.</p><p id="firmware-error" class="api-error hidden" role="alert"></p><div class="button-row"><button id="firmware-check" class="secondary" type="button">Verifică actualizări</button><button id="firmware-install" class="primary" type="button" disabled>Instalează</button></div><small class="auth-note">Oprește sesiunea înainte de instalare. După reboot, reconectează-te dacă pagina nu revine automat. Secure Boot și criptarea flash nu fac parte din M13.</small></div></div></section>
 <section class="network card" aria-labelledby="password-title"><div class="section-heading"><div><p class="eyebrow">AUTENTIFICARE LOCALĂ</p><h2 id="password-title">Schimbă parola dispozitivului</h2><p class="muted">Schimbarea parolei închide sesiunea curentă și cere autentificare din nou.</p></div></div><form id="password-form" class="provision-form"><label>Parola curentă<span class="input-shell"><input id="current-password" type="password" minlength="8" maxlength="63" autocomplete="current-password" required></span></label><label>Parola nouă<span class="input-shell"><input id="new-password" type="password" minlength="8" maxlength="63" autocomplete="new-password" required></span></label><button class="primary">Schimbă parola</button></form></section>
@@ -68,9 +70,10 @@ inline constexpr std::string_view app_css = R"CSS(:root{color-scheme:light;--emb
 .content-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px}.probe-list,.alarm-list{display:grid}.probe{display:grid;grid-template-columns:minmax(110px,1fr) auto;gap:12px;padding:14px 0;border-top:1px solid var(--line)}.probe:first-child{border-top:0}.probe-info{display:grid;grid-template-columns:40px 1fr;gap:10px;align-items:center}.probe-no{width:38px;height:38px;display:grid;place-items:center;border-radius:50%;background:var(--sage);color:#fff;font:500 1rem Georgia,"Times New Roman",serif}.probe-info b{display:block}.probe-info span{color:var(--muted);font-size:.8rem}.probe-reading{font:500 1.5rem Georgia,"Times New Roman",serif;text-align:right}.probe-controls{grid-column:1/-1;display:grid;grid-template-columns:1fr repeat(3,auto);gap:7px;align-items:end}.probe-controls label{margin:0}.probe-controls button{padding-inline:11px;font-size:.78rem}.alarm,.fault-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;border-top:1px solid var(--line)}.alarm:first-child{border-top:0}.alarm span{color:var(--soft);font-size:.82rem}.fault-box{padding:12px;border-radius:13px;background:#d56c5015;border:1px solid #d56c5040}.fault-box.ok{background:#83a89e12;border-color:#83a89e40;color:var(--muted)}
 .network{padding:clamp(20px,4vw,32px)}.network-grid{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(300px,.75fr);gap:22px}.subheading p{margin:.3rem 0 0;font-size:.8rem}.network-list{display:grid;gap:7px;margin-top:13px}.network-option{width:100%;display:grid;grid-template-columns:1fr auto;align-items:center;gap:10px;text-align:left;background:var(--surface)}.network-option.selected{border-color:var(--ember);box-shadow:inset 0 0 0 1px var(--ember)}.network-option.unsupported{border-style:dashed}.network-option b{display:block;overflow:hidden;text-overflow:ellipsis}.network-option small{color:var(--muted)}.signal{display:flex;align-items:end;gap:2px;height:20px}.signal i{width:4px;border-radius:2px;background:var(--line2)}.signal i:nth-child(1){height:5px}.signal i:nth-child(2){height:9px}.signal i:nth-child(3){height:14px}.signal i:nth-child(4){height:19px}.signal i.on{background:var(--sage)}.scan-placeholder{min-height:130px;display:grid;place-items:center;align-content:center;gap:11px;border:1px dashed var(--line2);border-radius:16px;color:var(--muted)}.scan-placeholder i{width:25px;height:25px;border:3px solid var(--line2);border-top-color:var(--ember);border-radius:50%;animation:spin .9s linear infinite}.api-error{margin-top:12px;padding:10px 12px;border:1px solid #d56c504f;border-radius:12px;background:#d56c5012;color:#d8785d}.provision-form{padding:18px;border-radius:18px;background:var(--surface2)}.provision-form>button{width:100%}.auth-note{display:block;margin-top:12px;color:var(--muted);line-height:1.5}.auth-note code{color:var(--ember)}.device-strip{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:20px;padding-top:18px;border-top:1px solid var(--line)}.device-strip div{display:grid;gap:2px}.device-strip small{color:var(--muted);font-size:.65rem;font-weight:800;letter-spacing:.09em}.device-strip strong{overflow-wrap:anywhere;font:500 .92rem Georgia,"Times New Roman",serif}.toast{position:sticky;z-index:10;bottom:14px;min-height:0;width:max-content;max-width:100%;margin:0 auto 16px;padding:0;border-radius:999px;background:var(--ink);color:var(--paper);box-shadow:0 10px 35px #0004;transition:.2s}.toast:not(:empty){padding:10px 16px}.setup-mode #network-panel{border-color:#ee7d3b55;box-shadow:0 18px 55px #bb572825}.setup-mode #network-kicker:after{content:" · CONFIGURARE NECESARĂ";color:var(--ember)}
 .firmware-grid{display:grid;grid-template-columns:minmax(230px,.65fr) minmax(0,1.35fr);gap:22px}.firmware-versions{display:grid;grid-template-columns:1fr 1fr;gap:8px}.firmware-versions div{display:grid;gap:5px;padding:16px;border-radius:16px;background:var(--surface2)}.firmware-versions small{color:var(--muted);font-size:.65rem;font-weight:800;letter-spacing:.09em}.firmware-versions strong{font:500 1.4rem Georgia,"Times New Roman",serif}.firmware-progress{height:12px;overflow:hidden;border-radius:999px;background:var(--surface3)}.firmware-progress i{display:block;width:0;height:100%;background:linear-gradient(90deg,var(--sage),var(--ember));transition:width .25s}.firmware .button-row{grid-template-columns:1fr 1fr}.firmware .button-row button{width:100%}
+.history-toolbar{display:grid;grid-template-columns:minmax(240px,.45fr) minmax(0,1fr);align-items:end;gap:18px}.history-toolbar label{margin:0}.history-toolbar select{width:100%;border:1px solid var(--line2);border-radius:13px;background:var(--app);padding:8px 38px 8px 12px}.history-toolbar p{margin:0 0 10px}.history-chart-wrap{position:relative;min-height:330px;margin-top:16px;border:1px solid var(--line);border-radius:17px;background:var(--surface2);overflow:hidden}.history-chart-wrap canvas{display:block;width:100%;height:330px}.history-chart-wrap .empty{position:absolute;inset:0;display:grid;place-items:center;margin:0}.history-legend{display:flex;flex-wrap:wrap;gap:8px 16px;margin-top:11px;color:var(--muted);font-size:.72rem}.history-legend span:before{content:"";display:inline-block;width:18px;height:3px;margin:0 6px 2px 0;border-radius:3px;background:var(--ember)}.history-legend .target:before{background:var(--gold)}.history-legend .probe-series:before{background:var(--sage)}.history-legend .heater-series:before{background:#8d70c9}.history-legend .marker-series:before{width:7px;height:7px;background:var(--text)}
 @keyframes spin{to{transform:rotate(360deg)}}
 @media(max-width:900px){.notices{grid-template-columns:1fr 1fr}.live-grid,.network-grid,.firmware-grid{grid-template-columns:1fr}.session-card{order:2}.content-grid{grid-template-columns:1fr}.setup-mode #network-panel{order:-1}.temperature-card{min-height:320px}}
-@media(max-width:600px){.site-header,main{width:min(100% - 22px,1180px)}.site-header{align-items:flex-start;padding-top:18px}.brand p{display:none}.brand>span{width:44px;height:44px}.brand h1{font-size:1.75rem}.header-actions{display:grid;justify-items:end}.theme-control{padding-left:0;border-left:0}.notices{grid-template-columns:1fr}.notice{min-height:0}.temperature-card{grid-template-columns:1fr 126px;gap:12px;padding:20px 16px}.heater-ring{width:126px}.heater-ring:before{width:102px}.heater-ring strong{font-size:1.55rem}.session-facts{grid-template-columns:1fr 1fr}.session-facts div:last-child{grid-column:1/-1}.card,.network{padding:16px;border-radius:19px}.button-row,.inline-form{grid-template-columns:1fr}.probe{grid-template-columns:1fr auto}.probe-controls{grid-template-columns:1fr 1fr}.probe-controls label{grid-column:1/-1}.probe-controls button{width:100%}.subheading{display:grid}.subheading button{width:100%}.device-strip{grid-template-columns:1fr}.section-heading h2{font-size:1.8rem}}
+@media(max-width:600px){.site-header,main{width:min(100% - 22px,1180px)}.site-header{align-items:flex-start;padding-top:18px}.brand p{display:none}.brand>span{width:44px;height:44px}.brand h1{font-size:1.75rem}.header-actions{display:grid;justify-items:end}.theme-control{padding-left:0;border-left:0}.notices{grid-template-columns:1fr}.notice{min-height:0}.temperature-card{grid-template-columns:1fr 126px;gap:12px;padding:20px 16px}.heater-ring{width:126px}.heater-ring:before{width:102px}.heater-ring strong{font-size:1.55rem}.session-facts{grid-template-columns:1fr 1fr}.session-facts div:last-child{grid-column:1/-1}.card,.network{padding:16px;border-radius:19px}.button-row,.inline-form{grid-template-columns:1fr}.probe{grid-template-columns:1fr auto}.probe-controls{grid-template-columns:1fr 1fr}.probe-controls label{grid-column:1/-1}.probe-controls button{width:100%}.subheading{display:grid}.subheading button{width:100%}.device-strip{grid-template-columns:1fr}.section-heading h2{font-size:1.8rem}.history-toolbar{grid-template-columns:1fr}.history-chart-wrap,.history-chart-wrap canvas{min-height:280px;height:280px}}
 )CSS";
 
 inline constexpr std::string_view app_js = R"JS('use strict';
@@ -88,6 +91,11 @@ let activeTargetPending = null;
 let activeTargetDraftVersion = 0;
 let maximumTemperature = 150;
 let latestSessionStatus = 'IDLE';
+let historySessions = [];
+let historyObservations = [];
+let selectedHistoryId = '';
+let historyLoadToken = 0;
+const historyPointBudget = 1200;
 
 const statusLabels = {
     IDLE: 'În așteptare', RUNNING: 'În desfășurare',
@@ -478,6 +486,220 @@ async function refreshFirmware() {
     }
 }
 
+function formatRelative(milliseconds) {
+    const seconds = Math.max(0, Math.floor(Number(milliseconds || 0) / 1000));
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    return hours ? `${hours} h ${minutes} min` : `${minutes} min`;
+}
+
+function formatUtc(seconds) {
+    return Number.isFinite(seconds)
+        ? new Date(seconds * 1000).toLocaleString('ro-RO', {dateStyle: 'short', timeStyle: 'short'})
+        : null;
+}
+
+function historySessionLabel(session) {
+    const utc = formatUtc(session.start_utc);
+    const state = session.active ? 'activă' : session.interrupted ? 'întreruptă' : 'încheiată';
+    return `#${session.history_id} · ${state} · ${utc || formatRelative(session.elapsed_ms)}`;
+}
+
+function renderHistorySessions(data) {
+    historySessions = data.sessions || [];
+    $('#history-pill span').textContent = data.status || 'FAILED';
+    $('#history-pill').className = `status-pill ${data.status === 'FAILED' ? 'fault' : data.status === 'DEGRADED' ? 'offline' : 'neutral'}`;
+    const select = $('#history-session');
+    const retained = historySessions.some(session => session.history_id === selectedHistoryId);
+    if (!retained) selectedHistoryId = historySessions[0]?.history_id || '';
+    select.replaceChildren();
+    if (!historySessions.length) {
+        select.add(new Option('Nicio sesiune', ''));
+    } else {
+        for (const session of historySessions) {
+            select.add(new Option(historySessionLabel(session), session.history_id));
+        }
+    }
+    select.value = selectedHistoryId;
+    const selected = historySessions.find(session => session.history_id === selectedHistoryId);
+    const usage = data.capacity_bytes
+        ? `${(data.used_bytes / 1048576).toFixed(2)} din ${(data.capacity_bytes / 1048576).toFixed(0)} MiB`
+        : 'capacitate indisponibilă';
+    $('#history-summary').textContent = selected
+        ? `${selected.sample_count} mostre periodice · ${formatRelative(selected.elapsed_ms)} · ${usage}`
+        : `Nicio sesiune înregistrată · ${usage}`;
+    const warnings = [];
+    if (data.status === 'DEGRADED') warnings.push('Stocarea istoricului este degradată; controlul local nu este afectat.');
+    if (data.status === 'FAILED') warnings.push('Istoricul nu este disponibil; controlul local continuă independent.');
+    if (selected?.interrupted) warnings.push('Sesiunea nu are înregistrare END și este afișată ca întreruptă.');
+    if (selected?.truncated) warnings.push('Începutul sesiunii a fost evacuat; sunt păstrate cele mai noi pagini.');
+    $('#history-warning').textContent = warnings.join(' ');
+    $('#history-warning').classList.toggle('hidden', !warnings.length);
+}
+
+function drawHistoryChart() {
+    const canvas = $('#history-chart');
+    const empty = $('#history-empty');
+    const observations = historyObservations;
+    empty.classList.toggle('hidden', observations.length > 0);
+    const bounds = canvas.getBoundingClientRect();
+    const width = Math.max(300, Math.floor(bounds.width || 900));
+    const height = Math.max(240, Math.floor(bounds.height || 330));
+    const scale = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = Math.floor(width * scale);
+    canvas.height = Math.floor(height * scale);
+    const context = canvas.getContext('2d');
+    context.setTransform(scale, 0, 0, scale, 0, 0);
+    context.clearRect(0, 0, width, height);
+    if (!observations.length) return;
+    const styles = getComputedStyle(document.documentElement);
+    const colors = {
+        grid: styles.getPropertyValue('--line2').trim(), text: styles.getPropertyValue('--muted').trim(),
+        chamber: styles.getPropertyValue('--ember').trim(), target: styles.getPropertyValue('--gold').trim(),
+        probe: styles.getPropertyValue('--sage').trim(), heater: '#8d70c9', marker: styles.getPropertyValue('--text').trim()
+    };
+    const padding = {left: 42, right: 38, top: 24, bottom: 34};
+    const plotWidth = width - padding.left - padding.right;
+    const plotHeight = height - padding.top - padding.bottom;
+    const lastElapsed = Math.max(1, ...observations.map(item => Number(item.elapsed_ms) || 0));
+    const temperatures = [];
+    for (const item of observations) {
+        if (Number.isFinite(item.chamber_celsius)) temperatures.push(item.chamber_celsius);
+        if (Number.isFinite(item.target_celsius)) temperatures.push(item.target_celsius);
+        for (const probe of item.probes || []) if (Number.isFinite(probe.current_celsius)) temperatures.push(probe.current_celsius);
+    }
+    const maximum = Math.max(10, ...temperatures) * 1.08;
+    const x = item => padding.left + (Number(item.elapsed_ms) || 0) / lastElapsed * plotWidth;
+    const yTemperature = value => padding.top + plotHeight - value / maximum * plotHeight;
+    const yHeater = value => padding.top + plotHeight - value / 100 * plotHeight;
+    context.font = '11px Arial';
+    context.fillStyle = colors.text;
+    context.strokeStyle = colors.grid;
+    context.lineWidth = 1;
+    for (let step = 0; step <= 4; step += 1) {
+        const y = padding.top + plotHeight * step / 4;
+        context.beginPath(); context.moveTo(padding.left, y); context.lineTo(width - padding.right, y); context.stroke();
+        context.fillText(`${Math.round(maximum * (4 - step) / 4)}°`, 5, y + 4);
+    }
+    const line = (values, color, mapper) => {
+        context.beginPath(); context.strokeStyle = color; context.lineWidth = 2; let drawing = false;
+        for (const [item, value] of values) {
+            if (!Number.isFinite(value)) { drawing = false; continue; }
+            const pointX = x(item); const pointY = mapper(value);
+            if (!drawing) context.moveTo(pointX, pointY); else context.lineTo(pointX, pointY);
+            drawing = true;
+        }
+        context.stroke();
+    };
+    line(observations.map(item => [item, item.chamber_celsius]), colors.chamber, yTemperature);
+    line(observations.map(item => [item, item.target_celsius]), colors.target, yTemperature);
+    const probeIds = [...new Set(observations.flatMap(item => (item.probes || []).map(probe => probe.id)))];
+    probeIds.forEach((probeId, index) => line(observations.map(item => {
+        const probe = (item.probes || []).find(value => value.id === probeId);
+        return [item, probe?.current_celsius];
+    }), index % 2 ? '#4f8f82' : colors.probe, yTemperature));
+    line(observations.map(item => [item, item.heater_percent]), colors.heater, yHeater);
+    for (const item of observations) {
+        const marker = item.kind === 'END' || item.fault || (item.alarms || []).length
+            || item.timer?.completed || item.kind === 'CHANGE';
+        if (!marker) continue;
+        context.strokeStyle = item.fault ? colors.chamber : colors.marker;
+        context.globalAlpha = .35;
+        context.beginPath(); context.moveTo(x(item), padding.top); context.lineTo(x(item), padding.top + plotHeight); context.stroke();
+        context.globalAlpha = 1;
+    }
+    context.fillStyle = colors.text;
+    context.fillText('0 min', padding.left, height - 10);
+    const endLabel = formatRelative(lastElapsed);
+    context.fillText(endLabel, width - padding.right - context.measureText(endLabel).width, height - 10);
+    context.fillText('heater %', width - padding.right - 42, padding.top - 8);
+}
+
+async function loadHistorySamples() {
+    if (!selectedHistoryId) {
+        historyObservations = [];
+        drawHistoryChart();
+        return;
+    }
+    const requestedHistoryId = selectedHistoryId;
+    const loadToken = ++historyLoadToken;
+    $('#history-session').disabled = true;
+    try {
+        const summary = historySessions.find(session => session.history_id === requestedHistoryId);
+        const stride = Math.max(1, Math.min(65535, Math.ceil((summary?.sample_count || 0) / 1100)));
+        const collected = [];
+        let omittedSamples = 0;
+        let omittedChanges = 0;
+        const retainObservation = observation => {
+            if (collected.length < historyPointBudget) {
+                collected.push(observation);
+                return;
+            }
+            if (observation.kind === 'SAMPLE') {
+                omittedSamples++;
+                return;
+            }
+            let replace = collected.findIndex(item => item.kind === 'SAMPLE');
+            if (replace < 0) replace = collected.findIndex(item => item.kind === 'CHANGE');
+            if (replace < 0) {
+                if (observation.kind === 'CHANGE') omittedChanges++;
+                return;
+            }
+            if (collected[replace].kind === 'SAMPLE') omittedSamples++;
+            else omittedChanges++;
+            collected.splice(replace, 1);
+            collected.push(observation);
+        };
+        let after = null;
+        do {
+            const query = new URLSearchParams({history_id: requestedHistoryId, limit: '60', stride: String(stride)});
+            if (after !== null) query.set('after', String(after));
+            const page = await request(`/api/v1/history/samples?${query}`);
+            for (const observation of page.observations || []) retainObservation(observation);
+            after = page.continuation;
+        } while (after !== null);
+        if (loadToken !== historyLoadToken || requestedHistoryId !== selectedHistoryId) return;
+        collected.sort((left, right) => left.sequence - right.sequence);
+        historyObservations = collected;
+        drawHistoryChart();
+        if (omittedSamples || omittedChanges) {
+            const warning = $('#history-warning');
+            const budget = omittedChanges
+                ? `Graficul păstrează START/END și cele mai recente evenimente; ${omittedChanges} schimbări vechi și ${omittedSamples} mostre periodice au fost omise din limita de ${historyPointBudget} puncte.`
+                : `Graficul păstrează toate evenimentele; ${omittedSamples} mostre periodice au fost omise din limita de ${historyPointBudget} puncte.`;
+            warning.textContent = [warning.textContent, budget].filter(Boolean).join(' ');
+            warning.classList.remove('hidden');
+        }
+    } catch (error) {
+        if (loadToken !== historyLoadToken) return;
+        $('#history-warning').textContent = error.message;
+        $('#history-warning').classList.remove('hidden');
+    } finally {
+        if (loadToken === historyLoadToken) {
+            $('#history-session').disabled = false;
+        }
+    }
+}
+
+async function refreshHistory() {
+    try {
+        const previous = selectedHistoryId;
+        const previouslySelected = historySessions.find(item => item.history_id === previous);
+        const data = await request('/api/v1/history/sessions?limit=32');
+        renderHistorySessions(data);
+        const currentlySelected = historySessions.find(item => item.history_id === selectedHistoryId);
+        const terminalRecordArrived = previouslySelected?.active && currentlySelected && !currentlySelected.active;
+        if (selectedHistoryId !== previous || currentlySelected?.active || terminalRecordArrived) {
+            await loadHistorySamples();
+        }
+    } catch (error) {
+        $('#history-pill span').textContent = 'INDISPONIBIL';
+        $('#history-pill').className = 'status-pill fault';
+        $('#history-warning').textContent = error.message;
+        $('#history-warning').classList.remove('hidden');
+    }
+}
+
 async function pollForever(task, delay) {
     await task();
     setTimeout(() => { void pollForever(task, delay); }, delay);
@@ -497,6 +719,15 @@ function applyTheme(value) {
 const savedTheme = localStorage.getItem('fumuri-theme');
 applyTheme(savedTheme === 'dark' || savedTheme === 'light' ? savedTheme : 'system');
 $('#theme').onchange = event => applyTheme(event.target.value);
+$('#history-session').onchange = async event => {
+    selectedHistoryId = event.target.value;
+    renderHistorySessions({status: $('#history-pill span').textContent, sessions: historySessions});
+    await loadHistorySamples();
+};
+window.addEventListener('resize', () => {
+    clearTimeout(drawHistoryChart.resizeTimer);
+    drawHistoryChart.resizeTimer = setTimeout(drawHistoryChart, 120);
+});
 $('#ssid').addEventListener('input', () => {
     networkTouched = true;
     selectedNetworkSecurity = null;
@@ -593,6 +824,7 @@ $('#password-form').onsubmit = async event => {
 void pollForever(refreshSnapshot, 1000);
 void pollForever(refreshNetwork, 5000);
 void pollForever(refreshFirmware, 1500);
+void pollForever(refreshHistory, 15000);
 void startScan();
 )JS";
 

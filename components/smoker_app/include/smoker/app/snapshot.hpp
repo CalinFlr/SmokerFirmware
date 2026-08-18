@@ -23,6 +23,7 @@ struct ProbeSnapshot final {
 struct SmokerSnapshot final {
     core::SessionStatus session_status{core::SessionStatus::Idle};
     std::optional<core::SessionId> session_id;
+    core::Duration session_elapsed{};
     std::optional<core::Recipe> recipe_snapshot;
     core::StopReason stop_reason{core::StopReason::None};
     std::optional<core::Temperature> chamber_temperature;

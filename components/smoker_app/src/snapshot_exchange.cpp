@@ -87,6 +87,7 @@ bool SnapshotExchange::publish(const SmokerSnapshotView& snapshot) noexcept
     auto& slot = slots_[destination];
     slot.session_status = snapshot.session_status;
     slot.session_id = snapshot.session_id;
+    slot.session_elapsed = snapshot.session_elapsed;
     slot.stop_reason = snapshot.stop_reason;
     slot.chamber_temperature = snapshot.chamber_temperature;
     slot.chamber_target = snapshot.chamber_target;
@@ -138,6 +139,7 @@ SmokerSnapshotView SnapshotExchange::view(const std::size_t index) const noexcep
     return SmokerSnapshotView{
         slot.session_status,
         slot.session_id,
+        slot.session_elapsed,
         slot.stop_reason,
         slot.chamber_temperature,
         slot.chamber_target,

@@ -336,6 +336,36 @@ const char* fault_code_name(const core::FaultCode code) noexcept
     return "CONFIGURATION_INVALID";
 }
 
+const char* history_kind_name(const HistoryObservationKind kind) noexcept
+{
+    switch (kind) {
+    case HistoryObservationKind::Start: return "START";
+    case HistoryObservationKind::Sample: return "SAMPLE";
+    case HistoryObservationKind::Change: return "CHANGE";
+    case HistoryObservationKind::End: return "END";
+    }
+    return "SAMPLE";
+}
+
+const char* history_state_name(const HistoryStorageState state) noexcept
+{
+    switch (state) {
+    case HistoryStorageState::Ready: return "READY";
+    case HistoryStorageState::Degraded: return "DEGRADED";
+    case HistoryStorageState::Failed: return "FAILED";
+    }
+    return "FAILED";
+}
+
+bool request_path_is(
+    const httpd_req_t* const request, const std::string_view expected
+) noexcept
+{
+    const std::string_view uri{request->uri};
+    const auto query = uri.find('?');
+    return uri.substr(0U, query) == expected;
+}
+
 bool add_optional_temperature(
     cJSON* const object,
     const char* const name,
@@ -483,11 +513,13 @@ public:
         app::SpscCommandMailbox& command_mailbox,
         const app::SnapshotExchange& snapshots,
         FirmwareUpdateService& firmware_updates,
+        HistoryService& history,
         core::Recipe startup_recipe
     )
         : command_mailbox_{command_mailbox}
         , snapshots_{snapshots}
         , firmware_updates_{firmware_updates}
+        , history_{history}
         , startup_recipe_{std::move(startup_recipe)}
     {
     }
@@ -916,7 +948,7 @@ private:
         configuration.stack_size = 8192U;
         configuration.recv_wait_timeout = 2U;
         configuration.send_wait_timeout = 2U;
-        configuration.max_uri_handlers = 24U;
+        configuration.max_uri_handlers = 26U;
         configuration.global_user_ctx = this;
         if (httpd_start(&http_server_, &configuration) != ESP_OK) {
             ESP_LOGE(tag, "HTTP server start failed");
@@ -937,6 +969,8 @@ private:
             std::pair{"/api/v1/firmware", HTTP_GET},
             std::pair{"/api/v1/firmware/check", HTTP_POST},
             std::pair{"/api/v1/firmware/install", HTTP_POST},
+            std::pair{"/api/v1/history/sessions", HTTP_GET},
+            std::pair{"/api/v1/history/samples", HTTP_GET},
             std::pair{"/api/v1/network", HTTP_GET},
             std::pair{"/api/v1/network", HTTP_PUT},
             std::pair{"/api/v1/network/scan", HTTP_GET},
@@ -1873,6 +1907,12 @@ private:
         if (std::strcmp(request->uri, "/api/v1/firmware/install") == 0) {
             return self->handle_firmware_install(request);
         }
+        if (request_path_is(request, "/api/v1/history/sessions")) {
+            return self->handle_history_sessions(request);
+        }
+        if (request_path_is(request, "/api/v1/history/samples")) {
+            return self->handle_history_samples(request);
+        }
         if (std::strcmp(request->uri, "/api/v1/network") == 0
             && request->method == HTTP_GET) {
             return self->handle_network_get(request);
@@ -2600,6 +2640,9 @@ private:
         require_json(cJSON_AddStringToObject(
             session, "stop_reason", stop_reason_name(snapshot.stop_reason)
         ), json_valid);
+        require_json(cJSON_AddNumberToObject(
+            session, "elapsed_ms", static_cast<double>(snapshot.session_elapsed.count())
+        ), json_valid);
 
         auto* const chamber = cJSON_AddObjectToObject(root.get(), "chamber");
         if (chamber == nullptr) {
@@ -2874,6 +2917,250 @@ private:
         return httpd_resp_send(
             request, response.bytes.data(), static_cast<ssize_t>(response.length)
         );
+    }
+
+    bool read_query(
+        httpd_req_t* const request,
+        std::array<char, 192U>& storage,
+        std::string_view& query
+    ) const noexcept
+    {
+        const auto length = httpd_req_get_url_query_len(request);
+        if (length == 0U) {
+            query = {};
+            return true;
+        }
+        if (length >= storage.size()
+            || httpd_req_get_url_query_str(request, storage.data(), storage.size())
+                != ESP_OK) {
+            return false;
+        }
+        query = std::string_view{storage.data(), length};
+        return true;
+    }
+
+    template <typename... Arguments>
+    bool send_json_chunk(
+        httpd_req_t* const request,
+        const char* const format,
+        Arguments... arguments
+    ) const noexcept
+    {
+        std::array<char, 1024U> chunk{};
+        const int count = std::snprintf(
+            chunk.data(), chunk.size(), format, arguments...
+        );
+        return count >= 0 && static_cast<std::size_t>(count) < chunk.size()
+            && httpd_resp_send_chunk(request, chunk.data(), count) == ESP_OK;
+    }
+
+    esp_err_t history_query_error(
+        httpd_req_t* const request, const HistoryQueryResult result
+    ) const noexcept
+    {
+        switch (result) {
+        case HistoryQueryResult::Busy:
+            return send_error(request, "503 Service Unavailable", "istoric temporar ocupat");
+        case HistoryQueryResult::NotFound:
+            return send_error(request, "404 Not Found", "sesiune istorică inexistentă");
+        case HistoryQueryResult::Failed:
+            return send_error(request, "503 Service Unavailable", "stocare istoric indisponibilă");
+        case HistoryQueryResult::Ok:
+            break;
+        }
+        return ESP_FAIL;
+    }
+
+    esp_err_t handle_history_sessions(httpd_req_t* const request) const noexcept
+    {
+        std::array<char, 192U> query_storage{};
+        std::string_view query;
+        if (!read_query(request, query_storage, query)) {
+            return send_error(request, "400 Bad Request", "query istoric prea lung");
+        }
+        const auto parsed = parse_history_sessions_query(query);
+        if (!parsed) {
+            return send_error(request, "400 Bad Request", "query sesiuni invalid");
+        }
+        std::vector<HistorySessionSummary> sessions;
+        const auto result = history_.sessions(parsed->before, parsed->limit, sessions);
+        if (result != HistoryQueryResult::Ok) return history_query_error(request, result);
+        const auto health = history_.health();
+        add_response_headers(request);
+        static_cast<void>(httpd_resp_set_type(request, "application/json"));
+        if (!send_json_chunk(
+                request,
+                "{\"status\":\"%s\",\"capacity_bytes\":%zu,\"used_bytes\":%zu,"
+                "\"mailbox_drops\":%llu,\"corrupt_records\":%llu,"
+                "\"write_errors\":%llu,\"sessions\":[",
+                history_state_name(health.state), health.capacity_bytes, health.used_bytes,
+                static_cast<unsigned long long>(health.mailbox_drops),
+                static_cast<unsigned long long>(health.corrupt_records),
+                static_cast<unsigned long long>(health.write_errors)
+            )) return ESP_FAIL;
+        for (std::size_t index = 0U; index < sessions.size(); ++index) {
+            const auto& value = sessions[index];
+            std::array<char, 40U> start_utc{};
+            std::array<char, 40U> end_utc{};
+            if (value.start_unix_utc_seconds) {
+                std::snprintf(start_utc.data(), start_utc.size(), "%lld",
+                              static_cast<long long>(*value.start_unix_utc_seconds));
+            } else {
+                static_cast<void>(copy_bounded(start_utc, "null"));
+            }
+            if (value.end_unix_utc_seconds) {
+                std::snprintf(end_utc.data(), end_utc.size(), "%lld",
+                              static_cast<long long>(*value.end_unix_utc_seconds));
+            } else {
+                static_cast<void>(copy_bounded(end_utc, "null"));
+            }
+            if (!send_json_chunk(
+                    request,
+                    "%s{\"history_id\":\"%llu\",\"application_session_id\":%lu,"
+                    "\"start_utc\":%s,\"end_utc\":%s,\"elapsed_ms\":%lld,"
+                    "\"sample_count\":%lu,\"final_status\":\"%s\","
+                    "\"stop_reason\":\"%s\",\"active\":%s,"
+                    "\"interrupted\":%s,\"truncated\":%s}",
+                    index == 0U ? "" : ",",
+                    static_cast<unsigned long long>(value.history_id),
+                    static_cast<unsigned long>(value.application_session_id),
+                    start_utc.data(), end_utc.data(),
+                    static_cast<long long>(value.elapsed.count()),
+                    static_cast<unsigned long>(value.sample_count),
+                    session_status_name(value.final_status),
+                    stop_reason_name(value.stop_reason),
+                    value.active ? "true" : "false",
+                    value.interrupted ? "true" : "false",
+                    value.truncated ? "true" : "false"
+                )) return ESP_FAIL;
+        }
+        if (httpd_resp_send_chunk(request, "]}", 2) != ESP_OK) return ESP_FAIL;
+        return httpd_resp_send_chunk(request, nullptr, 0);
+    }
+
+    esp_err_t handle_history_samples(httpd_req_t* const request) const noexcept
+    {
+        std::array<char, 192U> query_storage{};
+        std::string_view query;
+        if (!read_query(request, query_storage, query)) {
+            return send_error(request, "400 Bad Request", "query istoric prea lung");
+        }
+        const auto parsed = parse_history_samples_query(query);
+        if (!parsed) {
+            return send_error(request, "400 Bad Request", "query mostre invalid");
+        }
+        std::vector<HistoryObservation> observations;
+        std::optional<std::uint32_t> continuation;
+        const auto result = history_.samples(
+            parsed->history_id, parsed->after, parsed->limit, parsed->stride,
+            observations, continuation
+        );
+        if (result != HistoryQueryResult::Ok) return history_query_error(request, result);
+        add_response_headers(request);
+        static_cast<void>(httpd_resp_set_type(request, "application/json"));
+        if (!send_json_chunk(
+                request, "{\"history_id\":\"%llu\",\"observations\":[",
+                static_cast<unsigned long long>(parsed->history_id)
+            )) return ESP_FAIL;
+        for (std::size_t index = 0U; index < observations.size(); ++index) {
+            const auto& value = observations[index];
+            std::array<char, 40U> utc{};
+            std::array<char, 40U> chamber{};
+            std::array<char, 40U> target{};
+            if (value.unix_utc_seconds) {
+                std::snprintf(utc.data(), utc.size(), "%lld",
+                              static_cast<long long>(*value.unix_utc_seconds));
+            } else static_cast<void>(copy_bounded(utc, "null"));
+            if (value.chamber_temperature) {
+                std::snprintf(chamber.data(), chamber.size(), "%.3f",
+                              static_cast<double>(value.chamber_temperature->celsius()));
+            } else static_cast<void>(copy_bounded(chamber, "null"));
+            if (value.chamber_target) {
+                std::snprintf(target.data(), target.size(), "%.3f",
+                              static_cast<double>(value.chamber_target->celsius()));
+            } else static_cast<void>(copy_bounded(target, "null"));
+            if (!send_json_chunk(
+                    request,
+                    "%s{\"kind\":\"%s\",\"history_id\":\"%llu\","
+                    "\"sequence\":%lu,\"application_session_id\":%lu,"
+                    "\"status\":\"%s\",\"stop_reason\":\"%s\","
+                    "\"elapsed_ms\":%lld,\"unix_utc\":%s,"
+                    "\"chamber_celsius\":%s,\"target_celsius\":%s,"
+                    "\"heater_percent\":%.3f,\"timer\":{\"started\":%s,"
+                    "\"completed\":%s,\"elapsed_ms\":%lld},\"probes\":[",
+                    index == 0U ? "" : ",", history_kind_name(value.kind),
+                    static_cast<unsigned long long>(value.history_id),
+                    static_cast<unsigned long>(value.sequence),
+                    static_cast<unsigned long>(value.application_session_id),
+                    session_status_name(value.session_status),
+                    stop_reason_name(value.stop_reason),
+                    static_cast<long long>(value.session_elapsed.count()), utc.data(),
+                    chamber.data(), target.data(),
+                    static_cast<double>(value.heater_demand.percent()),
+                    value.timer.started ? "true" : "false",
+                    value.timer.completed ? "true" : "false",
+                    static_cast<long long>(value.timer.elapsed.count())
+                )) return ESP_FAIL;
+            for (std::size_t probe_index = 0U; probe_index < value.probes.size(); ++probe_index) {
+                const auto& probe = value.probes[probe_index];
+                std::array<char, 40U> current{};
+                std::array<char, 40U> probe_target{};
+                if (probe.current_temperature) {
+                    std::snprintf(current.data(), current.size(), "%.3f",
+                                  static_cast<double>(probe.current_temperature->celsius()));
+                } else static_cast<void>(copy_bounded(current, "null"));
+                if (probe.target_temperature) {
+                    std::snprintf(probe_target.data(), probe_target.size(), "%.3f",
+                                  static_cast<double>(probe.target_temperature->celsius()));
+                } else static_cast<void>(copy_bounded(probe_target, "null"));
+                if (!send_json_chunk(
+                        request,
+                        "%s{\"id\":%u,\"role\":\"%s\",\"current_celsius\":%s,"
+                        "\"target_celsius\":%s,\"enabled\":%s,\"alarm_enabled\":%s}",
+                        probe_index == 0U ? "" : ",", static_cast<unsigned>(probe.id),
+                        probe_role_name(probe.role), current.data(), probe_target.data(),
+                        probe.enabled ? "true" : "false",
+                        probe.alarm_enabled ? "true" : "false"
+                    )) return ESP_FAIL;
+            }
+            if (httpd_resp_send_chunk(
+                    request, "],\"alarms\":[", HTTPD_RESP_USE_STRLEN
+                ) != ESP_OK) return ESP_FAIL;
+            for (std::size_t alarm_index = 0U; alarm_index < value.alarms.size(); ++alarm_index) {
+                const auto& alarm = value.alarms[alarm_index];
+                std::array<char, 16U> probe_id{};
+                if (alarm.probe_id) {
+                    std::snprintf(probe_id.data(), probe_id.size(), "%u",
+                                  static_cast<unsigned>(*alarm.probe_id));
+                } else static_cast<void>(copy_bounded(probe_id, "null"));
+                if (!send_json_chunk(
+                        request,
+                        "%s{\"id\":%lu,\"code\":\"%s\",\"probe_id\":%s,"
+                        "\"acknowledged\":%s}",
+                        alarm_index == 0U ? "" : ",",
+                        static_cast<unsigned long>(alarm.id), alarm_code_name(alarm.code),
+                        probe_id.data(), alarm.acknowledged ? "true" : "false"
+                    )) return ESP_FAIL;
+            }
+            if (value.fault) {
+                if (!send_json_chunk(request, "],\"fault\":\"%s\"}", fault_code_name(*value.fault))) {
+                    return ESP_FAIL;
+                }
+            } else if (httpd_resp_send_chunk(
+                           request, "],\"fault\":null}", HTTPD_RESP_USE_STRLEN
+                       ) != ESP_OK) {
+                return ESP_FAIL;
+            }
+        }
+        if (continuation) {
+            if (!send_json_chunk(request, "],\"continuation\":%lu}",
+                    static_cast<unsigned long>(*continuation))) return ESP_FAIL;
+        } else if (httpd_resp_send_chunk(
+                       request, "],\"continuation\":null}", HTTPD_RESP_USE_STRLEN
+                   ) != ESP_OK) {
+            return ESP_FAIL;
+        }
+        return httpd_resp_send_chunk(request, nullptr, 0);
     }
 
     esp_err_t handle_network_get(httpd_req_t* const request) const noexcept
@@ -3419,6 +3706,7 @@ private:
     app::SpscCommandMailbox& command_mailbox_;
     const app::SnapshotExchange& snapshots_;
     FirmwareUpdateService& firmware_updates_;
+    HistoryService& history_;
     core::Recipe startup_recipe_;
     mutable std::mutex mutex_;
     std::mutex wifi_mode_mutex_;
@@ -3469,10 +3757,12 @@ LocalConnectivityService::LocalConnectivityService(
     app::SpscCommandMailbox& command_mailbox,
     const app::SnapshotExchange& snapshots,
     FirmwareUpdateService& firmware_updates,
+    HistoryService& history,
     core::Recipe startup_recipe
 ) noexcept
     : impl_{new (std::nothrow) Impl{
-          command_mailbox, snapshots, firmware_updates, std::move(startup_recipe)
+          command_mailbox, snapshots, firmware_updates, history,
+          std::move(startup_recipe)
       }}
 {
 }

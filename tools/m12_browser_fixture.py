@@ -10,7 +10,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, parse_qsl, urlsplit
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -50,13 +50,13 @@ snapshot_requests = 0
 maximum_snapshot_requests = 0
 next_command_id = 1
 firmware = {
-    "state": "IDLE", "current_version": "0.13.0", "available_version": None,
+    "state": "IDLE", "current_version": "0.14.0", "available_version": None,
     "progress_percent": 0, "installation_allowed": False, "error": None,
 }
 firmware_reads = 0
 
 snapshot = {
-    "session": {"status": "IDLE", "id": None, "stop_reason": "NONE"},
+    "session": {"status": "IDLE", "id": None, "stop_reason": "NONE", "elapsed_ms": 0},
     "chamber": {"current_celsius": 27.5, "target_celsius": None},
     "heater": {"demand_percent": 0.0, "io": "SIMULATED"},
     "timer": {"started": False, "completed": False, "elapsed_ms": 0},
@@ -78,6 +78,54 @@ network = {
             "ip": "192.168.1.42", "last_error": None},
     "ap": {"active": False, "ssid": "Smoker-A1B2C3", "ip": "192.168.4.1"},
 }
+
+history_sessions = [
+    {"history_id": "102", "application_session_id": 2,
+     "start_utc": 1787036400, "end_utc": None, "elapsed_ms": 7_500_000,
+     "sample_count": 125, "final_status": "RUNNING", "stop_reason": "NONE",
+     "active": True, "interrupted": False, "truncated": False},
+    {"history_id": "101", "application_session_id": 1,
+     "start_utc": None, "end_utc": None, "elapsed_ms": 180_000,
+     "sample_count": 3, "final_status": "RUNNING", "stop_reason": "NONE",
+     "active": False, "interrupted": True, "truncated": True},
+]
+
+
+def history_observations(history_id: str) -> list[dict[str, object]]:
+    count = 125 if history_id == "102" else 3
+    result: list[dict[str, object]] = []
+    for sequence in range(count + 1):
+        elapsed = sequence * 60_000
+        kind = "START" if sequence == 0 else "SAMPLE"
+        result.append({
+            "kind": kind, "history_id": history_id, "sequence": sequence,
+            "application_session_id": 2 if history_id == "102" else 1,
+            "status": "RUNNING", "stop_reason": "NONE", "elapsed_ms": elapsed,
+            "unix_utc": 1787036400 + sequence * 60 if history_id == "102" else None,
+            "chamber_celsius": 72 + min(sequence, 40) * .8,
+            "target_celsius": 110.0, "heater_percent": 100 if sequence < 40 else 35,
+            "timer": {"started": sequence >= 2, "completed": False,
+                      "elapsed_ms": max(0, elapsed - 120_000)},
+            "probes": [{"id": 1, "role": "MEAT", "current_celsius": 24 + sequence * .25,
+                        "target_celsius": 75.0, "enabled": True, "alarm_enabled": True}],
+            "alarms": ([{"id": 9, "code": "PROBE_TARGET_REACHED", "probe_id": 1,
+                          "acknowledged": False}] if sequence == 80 else []),
+            "fault": None,
+        })
+    if history_id == "101":
+        result.insert(2, {**result[1], "kind": "CHANGE", "sequence": 100,
+                          "elapsed_ms": 90_000, "target_celsius": 105.0})
+    if history_id == "102" and not history_sessions[0]["active"]:
+        final_sample = result[-1]
+        for change_index in range(700):
+            result.append({**final_sample, "kind": "CHANGE",
+                           "sequence": count + 1 + change_index,
+                           "elapsed_ms": 7_500_000 + change_index * 80,
+                           "target_celsius": 100.0 + (change_index % 20) * .5})
+        result.append({**result[-1], "kind": "END", "sequence": count + 701,
+                       "status": "STOPPED", "stop_reason": "USER",
+                       "elapsed_ms": 7_560_000, "unix_utc": 1787043960})
+    return sorted(result, key=lambda item: int(item["sequence"]))
 
 
 class FixtureServer(ThreadingHTTPServer):
@@ -209,6 +257,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/login.css": self.send_bytes(LOGIN_CSS, "text/css; charset=utf-8"); return
         if self.path == "/login.js": self.send_bytes(LOGIN_JS, "application/javascript"); return
         if not self.require_operational_auth(): return
+        route = urlsplit(self.path).path
         if self.path == "/": self.send_bytes(INDEX, "text/html; charset=utf-8")
         elif self.path == "/app.css": self.send_bytes(APP_CSS, "text/css; charset=utf-8")
         elif self.path == "/app.js": self.send_bytes(APP_JS, "application/javascript")
@@ -243,6 +292,60 @@ class Handler(BaseHTTPRequestHandler):
                     value["installation_allowed"] = value["state"] == "AVAILABLE" \
                         and snapshot["session"]["status"] != "RUNNING"
                 self.send_json(value)
+        elif route == "/api/v1/history/sessions":
+            if self.headers.get("Origin") not in {None, f"http://{self.headers.get('Host')}"}:
+                self.send_json({"error": "origine istoric respinsă"}, 403); return
+            try:
+                fields = parse_qsl(urlsplit(self.path).query, keep_blank_values=True,
+                                   strict_parsing=True)
+                if len(fields) != len({name for name, _ in fields}) \
+                        or any(name not in {"before", "limit"} for name, _ in fields):
+                    raise ValueError
+                values = dict(fields); limit = int(values.get("limit", "16"))
+                before = int(values["before"]) if "before" in values else None
+                if not 1 <= limit <= 32 or before is not None and before <= 0: raise ValueError
+            except ValueError:
+                self.send_json({"error": "query sesiuni invalid"}, 400); return
+            sessions = [item for item in history_sessions
+                        if before is None or int(item["history_id"]) < before][:limit]
+            self.send_json({"status": "DEGRADED", "capacity_bytes": 4_194_304,
+                            "used_bytes": 32_768, "mailbox_drops": 2,
+                            "corrupt_records": 0, "write_errors": 0,
+                            "sessions": sessions})
+        elif route == "/api/v1/history/samples":
+            if self.headers.get("Origin") not in {None, f"http://{self.headers.get('Host')}"}:
+                self.send_json({"error": "origine istoric respinsă"}, 403); return
+            try:
+                fields = parse_qsl(urlsplit(self.path).query, keep_blank_values=True,
+                                   strict_parsing=True)
+                if len(fields) != len({name for name, _ in fields}) \
+                        or any(name not in {"history_id", "after", "limit", "stride"}
+                               for name, _ in fields): raise ValueError
+                values = dict(fields); history_id = values["history_id"]
+                if history_id not in {"101", "102"}: self.send_json({"error": "not_found"}, 404); return
+                after = int(values["after"]) if "after" in values else None
+                limit = int(values.get("limit", "60")); stride = int(values.get("stride", "1"))
+                if after is not None and after < 0 or not 1 <= limit <= 60 \
+                        or not 1 <= stride <= 65535: raise ValueError
+            except (KeyError, ValueError):
+                self.send_json({"error": "query mostre invalid"}, 400); return
+            periodic = 0; selected = []
+            for item in history_observations(history_id):
+                include = item["kind"] != "SAMPLE" or periodic % stride == 0
+                if item["kind"] == "SAMPLE": periodic += 1
+                if after is not None and int(item["sequence"]) <= after or not include: continue
+                selected.append(item)
+            continuation = int(selected[limit - 1]["sequence"]) if len(selected) > limit else None
+            self.send_json({"history_id": history_id, "observations": selected[:limit],
+                            "continuation": continuation})
+        elif self.path == "/fixture/history/complete":
+            with state_lock:
+                history_sessions[0].update({
+                    "end_utc": 1787043960, "elapsed_ms": 7_560_000,
+                    "final_status": "STOPPED", "stop_reason": "USER",
+                    "active": False,
+                })
+            self.send_json({"status": "completed"})
         elif self.path == "/fixture/metrics":
             with state_lock: self.send_json({"maximum_snapshot_requests": maximum_snapshot_requests})
         else: self.send_bytes(b"Autentificare necesara.", "text/plain", 303, {"Location": "/login"})
@@ -303,7 +406,7 @@ class Handler(BaseHTTPRequestHandler):
             if int(self.headers.get("Content-Length", "0")) != 0:
                 self.send_json({"error": "verificarea nu acceptă body"}, 400); return
             with state_lock:
-                firmware.update({"state": "AVAILABLE", "available_version": "0.13.1",
+                firmware.update({"state": "AVAILABLE", "available_version": "0.14.1",
                                  "progress_percent": 0, "installation_allowed": True,
                                  "error": None})
             self.send_json({"status": "accepted"}, 202); return

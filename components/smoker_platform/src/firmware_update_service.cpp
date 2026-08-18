@@ -92,6 +92,39 @@ DRAM_ATTR StaticTask_t ota_task_storage;
 DRAM_ATTR std::array<StackType_t, ota_task_stack_size_bytes / sizeof(StackType_t)>
     ota_task_stack;
 
+class OtaFlashLease final {
+public:
+    OtaFlashLease(
+        FlashOperationCoordinator& coordinator,
+        const MonotonicDeadline& deadline
+    ) noexcept
+        : coordinator_{coordinator}
+    {
+        while (!(acquired_ = coordinator_.try_acquire_ota())) {
+            if (deadline.expired(esp_timer_get_time())) return;
+            vTaskDelay(pdMS_TO_TICKS(10));
+        }
+    }
+    ~OtaFlashLease()
+    {
+        if (acquired_) {
+            coordinator_.release_ota();
+        } else {
+            // try_acquire_ota() raises the deferral flag before waiting for a
+            // bounded in-progress history operation. If the OTA deadline wins,
+            // allow history to resume even though this lease never owned flash.
+            coordinator_.set_history_deferred(false);
+        }
+    }
+    OtaFlashLease(const OtaFlashLease&) = delete;
+    OtaFlashLease& operator=(const OtaFlashLease&) = delete;
+    [[nodiscard]] explicit operator bool() const noexcept { return acquired_; }
+
+private:
+    FlashOperationCoordinator& coordinator_;
+    bool acquired_{false};
+};
+
 enum class ImageStreamError : std::uint8_t {
     None,
     Timeout,
@@ -474,11 +507,16 @@ void rollback_pending_firmware_and_reboot_if_needed() noexcept
 
 class FirmwareUpdateService::Impl final {
 public:
-    explicit Impl(const app::SnapshotExchange& snapshots) noexcept
+    Impl(
+        const app::SnapshotExchange& snapshots,
+        FlashOperationCoordinator& flash_operations
+    ) noexcept
         : snapshots_{snapshots}
+        , flash_operations_{flash_operations}
         , coordinator_{esp_app_get_description()->version}
     {
         if (running_firmware_validation_pending()) {
+            flash_operations_.set_history_deferred(true);
             coordinator_.begin_validation();
             validation_pending_.store(true, std::memory_order_release);
             validation_started_at_.store(esp_timer_get_time(), std::memory_order_release);
@@ -752,6 +790,7 @@ private:
             rollback_running_firmware_and_reboot();
         }
         validation_pending_.store(false, std::memory_order_release);
+        flash_operations_.set_history_deferred(false);
         {
             std::lock_guard lock{mutex_};
             coordinator_.note_validation_succeeded();
@@ -801,6 +840,11 @@ private:
         const MonotonicDeadline deadline{
             esp_timer_get_time(), install_timeout_microseconds
         };
+        OtaFlashLease flash_lease{flash_operations_, deadline};
+        if (!flash_lease) {
+            fail("flash_operation_timeout");
+            return;
+        }
         if (!synchronize_wall_time(deadline)) {
             fail("time_sync_failed");
             return;
@@ -940,6 +984,7 @@ private:
     }
 
     const app::SnapshotExchange& snapshots_;
+    FlashOperationCoordinator& flash_operations_;
     mutable std::mutex mutex_;
     FirmwareUpdateCoordinator coordinator_;
     std::optional<MonotonicDeadline> permission_deadline_;
@@ -955,9 +1000,10 @@ private:
 };
 
 FirmwareUpdateService::FirmwareUpdateService(
-    const app::SnapshotExchange& snapshots
+    const app::SnapshotExchange& snapshots,
+    FlashOperationCoordinator& flash_operations
 ) noexcept
-    : impl_{new (std::nothrow) Impl{snapshots}}
+    : impl_{new (std::nothrow) Impl{snapshots, flash_operations}}
 {
 }
 

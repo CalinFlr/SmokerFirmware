@@ -9,6 +9,45 @@
 namespace smoker::platform {
 namespace {
 
+template <typename Integer>
+std::optional<Integer> parse_decimal(const std::string_view text) noexcept
+{
+    if (text.empty()) return std::nullopt;
+    Integer value = 0U;
+    for (const char character : text) {
+        if (character < '0' || character > '9') return std::nullopt;
+        const auto digit = static_cast<Integer>(character - '0');
+        if (value > (std::numeric_limits<Integer>::max() - digit) / 10U) {
+            return std::nullopt;
+        }
+        value = static_cast<Integer>(value * 10U + digit);
+    }
+    return value;
+}
+
+template <typename Visitor>
+bool visit_query(const std::string_view query, Visitor&& visitor) noexcept
+{
+    if (query.empty()) return true;
+    std::size_t cursor = 0U;
+    while (cursor < query.size()) {
+        const auto separator = query.find('&', cursor);
+        const auto end = separator == std::string_view::npos ? query.size() : separator;
+        const auto field = query.substr(cursor, end - cursor);
+        const auto equals = field.find('=');
+        if (field.empty() || equals == std::string_view::npos
+            || equals == 0U || equals + 1U == field.size()
+            || field.find('=', equals + 1U) != std::string_view::npos
+            || !visitor(field.substr(0U, equals), field.substr(equals + 1U))) {
+            return false;
+        }
+        if (separator == std::string_view::npos) return true;
+        cursor = separator + 1U;
+        if (cursor == query.size()) return false;
+    }
+    return true;
+}
+
 constexpr std::uint16_t dns_type_a = 1U;
 constexpr std::uint16_t dns_type_any = 255U;
 constexpr std::uint16_t dns_class_in = 1U;
@@ -730,6 +769,77 @@ DnsResponseResult build_captive_dns_response(
     std::copy(portal_ipv4.begin(), portal_ipv4.end(), response.begin()
               + static_cast<std::ptrdiff_t>(question_end + 12U));
     return {DnsResponseStatus::Answer, required};
+}
+
+std::optional<HistorySessionsQuery> parse_history_sessions_query(
+    const std::string_view query
+) noexcept
+{
+    HistorySessionsQuery result;
+    bool saw_before = false;
+    bool saw_limit = false;
+    const bool valid = visit_query(query, [&](const auto name, const auto value) {
+        if (name == "before" && !saw_before) {
+            const auto parsed = parse_decimal<std::uint64_t>(value);
+            if (!parsed || *parsed == 0U) return false;
+            result.before = *parsed;
+            saw_before = true;
+            return true;
+        }
+        if (name == "limit" && !saw_limit) {
+            const auto parsed = parse_decimal<std::uint8_t>(value);
+            if (!parsed || *parsed < 1U || *parsed > 32U) return false;
+            result.limit = *parsed;
+            saw_limit = true;
+            return true;
+        }
+        return false;
+    });
+    return valid ? std::optional<HistorySessionsQuery>{result} : std::nullopt;
+}
+
+std::optional<HistorySamplesQuery> parse_history_samples_query(
+    const std::string_view query
+) noexcept
+{
+    HistorySamplesQuery result;
+    bool saw_history_id = false;
+    bool saw_after = false;
+    bool saw_limit = false;
+    bool saw_stride = false;
+    const bool valid = visit_query(query, [&](const auto name, const auto value) {
+        if (name == "history_id" && !saw_history_id) {
+            const auto parsed = parse_decimal<std::uint64_t>(value);
+            if (!parsed || *parsed == 0U) return false;
+            result.history_id = *parsed;
+            saw_history_id = true;
+            return true;
+        }
+        if (name == "after" && !saw_after) {
+            const auto parsed = parse_decimal<std::uint32_t>(value);
+            if (!parsed) return false;
+            result.after = *parsed;
+            saw_after = true;
+            return true;
+        }
+        if (name == "limit" && !saw_limit) {
+            const auto parsed = parse_decimal<std::uint8_t>(value);
+            if (!parsed || *parsed < 1U || *parsed > 60U) return false;
+            result.limit = *parsed;
+            saw_limit = true;
+            return true;
+        }
+        if (name == "stride" && !saw_stride) {
+            const auto parsed = parse_decimal<std::uint16_t>(value);
+            if (!parsed || *parsed < 1U) return false;
+            result.stride = *parsed;
+            saw_stride = true;
+            return true;
+        }
+        return false;
+    });
+    return valid && saw_history_id
+        ? std::optional<HistorySamplesQuery>{result} : std::nullopt;
 }
 
 } // namespace smoker::platform

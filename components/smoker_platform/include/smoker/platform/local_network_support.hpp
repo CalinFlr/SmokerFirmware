@@ -141,6 +141,27 @@ struct WifiNetworkList final {
     bool state_changing
 ) noexcept;
 
+struct HistorySessionsQuery final {
+    std::optional<std::uint64_t> before;
+    std::uint8_t limit{16U};
+};
+
+struct HistorySamplesQuery final {
+    std::uint64_t history_id{0U};
+    std::optional<std::uint32_t> after;
+    std::uint8_t limit{60U};
+    std::uint16_t stride{1U};
+};
+
+// Numeric history query strings are deliberately strict: no duplicate,
+// unknown, empty, signed, encoded, overflowing, or out-of-range values.
+[[nodiscard]] std::optional<HistorySessionsQuery> parse_history_sessions_query(
+    std::string_view query
+) noexcept;
+[[nodiscard]] std::optional<HistorySamplesQuery> parse_history_samples_query(
+    std::string_view query
+) noexcept;
+
 class HttpSessionState final {
 public:
     static constexpr std::size_t token_characters = 64U;

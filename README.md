@@ -24,9 +24,10 @@ Official references:
 ## Current implementation status
 
 M0-M5 complete the **V0 simulated application/control slice**. M12 adds local
-Wi-Fi/API/UI and M13 adds manual HTTPS OTA with rollback-capable partitions.
-Radio and OTA target scenarios remain pending, so these are scoped software
-milestones, not a claim that product V0 is complete.
+Wi-Fi/API/UI, M13 adds manual HTTPS OTA with rollback, and M14 adds durable
+local session history. M14 target persistence/reboot has passed on KFB003; its
+deliberate Wi-Fi-loss scenario and remaining M12 radio scenarios are still
+explicit gates. None is a claim that product V0 is complete.
 M6A is complete for the final SuooTci `KFB003` ESP32-S3 N16R8 controller:
 carrier inventory, 16 MiB Quad SPI flash, 8 MiB Octal SPI PSRAM, native USB,
 application runtime, stack use, and task-watchdog reset behavior are recorded
@@ -59,7 +60,10 @@ The firmware now provides:
 - manual authenticated firmware check/install from one fixed GitHub Release,
   an application-owned Start interlock, and bounded post-update validation;
 - one static low-priority core-0 `OtaTask`, dual 3 MiB OTA slots, app rollback,
-  and a `0.13.0` tag-gated release workflow.
+  and the tag-gated signed release workflow;
+- a bounded post-control history mailbox, one static low-priority core-0
+  `HistoryTask`, a 4 MiB CRC/commit-last circular log, authenticated read-only
+  history APIs, and a responsive Romanian chart.
 
 The initial controller is deliberately simple: it requests `100%` below the
 active chamber target and `0%` at or above it. A missing target means monitoring
@@ -208,6 +212,43 @@ strict, request bodies are limited to 512 bytes, and CORS is not enabled. The
 responsive embedded Fumuri UI uses no remote resources, self-schedules one
 snapshot poll at a time, supports system/light/dark themes, and labels all
 temperature/heater I/O as simulated.
+
+## Durable local history (M14)
+
+History is recorded only for active sessions. START, END, and meaningful state
+changes are recorded on the first observed control cycle, while periodic
+complete snapshots are stored every minute during RUNNING. Each record uses
+monotonic session elapsed time; Unix UTC is optional
+and appears only after the system clock has become credible.
+
+The 4 MiB `history` partition is a versioned raw 4 KiB page log with CRC and
+commit-last markers. It reconstructs committed prefixes after reboot, reports
+corruption/drop/write health, and uses a commit-only eviction tombstone so a
+reset or erase failure cannot expose half of an evicted completed session.
+Completed sessions are evicted oldest first; interrupted or truncated histories
+remain explicit. History is not M10 recovery state and cannot start/resume a
+session or affect heater control.
+
+`HistoryTask` on core 0 performs storage work outside TWDT. `ControlTask` only
+copies a post-safety immutable observation into a preallocated 16-entry SPSC
+mailbox; it never waits for history or reads flash/UTC. OTA and history serialize
+flash ownership, with OTA deferring new history operations within its existing
+installation deadline.
+
+Authenticated operational-STA clients can read:
+
+```text
+GET /api/v1/history/sessions?before=<history_id>&limit=1..32
+GET /api/v1/history/samples?history_id=<id>&after=<sequence>&limit=1..60&stride=1..65535
+```
+
+The commissioning SoftAP rejects both routes. IDs are decimal JSON strings;
+APIs are read-only and M14 has no erase, CSV, upload, cloud, or external asset.
+The dashboard scans the selected retained session through its final page and
+limits rendering to 1,200 observations. It strides and discards periodic SAMPLE
+records first, so START/END and ordinary lifecycle/change markers remain visible;
+an explicit warning reports any additional reduction required by an unusually
+dense change stream.
 
 ## Firmware update (M13)
 
@@ -364,8 +405,8 @@ The host build compiles `smoker_core`, `smoker_app`, simulated platform adapters
 and tests with the same strict C++20 baseline as the target, warnings as errors,
 exceptions disabled, and RTTI disabled.
 CTest reports checkpoints for M2, M3, M4, M5, M12 concurrent
-transport/snapshot exchange, and M13 OTA policy/version state in addition to
-the M1 domain-value tests.
+transport/snapshot exchange, M13 OTA policy/version state, and M14 durable
+history/reconstruction/query behavior in addition to the M1 domain-value tests.
 
 Optional host sanitizer validation:
 
@@ -378,7 +419,7 @@ cmake --build build-host-sanitize
 ctest --test-dir build-host-sanitize --output-on-failure
 ```
 
-## M0-M13 verification and architecture guardrails
+## M0-M14 verification and architecture guardrails
 
 The complete local verification entrypoint runs architecture/traceability
 guardrails, native host tests, ASan/UBSan, and the pinned ESP-IDF cross-build:
@@ -400,11 +441,13 @@ STA OPEN, and exact-Origin writes. A real-browser check for both AP setup and ST
 login/dashboard rendering, password visibility, and
 non-overlapping polling, live focused-probe readings, unsupported Wi-Fi choices,
 semantic command feedback, firmware progress/interlock/error recovery, and a
-390-pixel responsive viewport is also versioned and uses an
+390-pixel responsive viewport is also versioned. M14 additionally checks
+current/past history selection, raw pagination, missing UTC, degraded/
+truncated warnings, and bounded chart rendering. It uses an
 external Playwright CLI without adding npm dependencies to firmware:
 
 ```sh
-PWCLI=/path/to/playwright_cli.sh tools/check_m12_browser.sh
+PWCLI=/path/to/playwright_cli.sh tools/check_m14_browser.sh
 ```
 
 `--idf-only` requires ESP-IDF `v6.0.2`; the script activates the repository's
@@ -429,7 +472,8 @@ compiled as strict C++20. The full/IDF verification modes run it automatically.
 
 The architecture check guards layer imports, component dependencies, single
 ControlTask ownership, heater writes, command submission, M12 transport/core
-placement, M13 OTA task/API/release/partition contracts, and the deliberately
+placement, M13 OTA task/API/release contracts, M14 history isolation/API/
+partition contracts, and the deliberately
 small V0 state/command shape. The traceability check requires exactly one row
 for every approved rule and verifies concrete host-test references. GitHub CI
 runs these checks with host tests/sanitizers and a separate ESP-IDF v6.0.2
@@ -510,15 +554,17 @@ smoker-controller/
     ├── PLANS.md
     ├── M0_M5_REMEDIATION_PLAN.md
     ├── P0_ARCHITECTURE_GUARDRAILS_PLAN.md
-    └── M13_PLAN.md
+    ├── M13_PLAN.md
+    └── M14_DURABLE_HISTORY_PLAN.md
 ```
 
-M13's exact custom layout preserves the M12 24 KiB NVS partition and adds
-`otadata`, `phy_init`, and two 3 MiB OTA application slots. The rest of the
-target-confirmed 16 MiB flash remains unallocated. Verification enforces the
-table and a 75% image-usage ceiling per slot. An M12 device needs one complete
-serial flash to adopt this layout because its single-app image cannot migrate
-the partition table itself.
+M14's exact custom layout preserves the 24 KiB NVS partition, `otadata`,
+`phy_init`, and two 3 MiB OTA application slots, then adds `history` at
+`0x620000` with size `0x400000`. The remaining `0x5e0000` bytes of the
+target-confirmed 16 MiB flash are unallocated. Verification enforces the table
+and a 75% image-usage ceiling per app slot. An M13 device needs one complete
+signed serial flash to adopt the M14 table because an application OTA cannot
+migrate its own partition table; the helper does not erase or write NVS.
 
 ## M0-M5 outcome and next gate
 
@@ -537,19 +583,30 @@ The V0 simulated application/control slice includes:
 - safety override;
 - host tests for core business rules.
 
-Wi-Fi provisioning, local HTTP/UI, and M13 OTA software are present. No display,
-session/power-recovery persistence, real SSR, real temperature frontend, fan,
-smoke generator, or cloud has been added. No physical heater or hardware-safety
-behavior has been tested by the simulation/build/unit tests. The signed M13 USB
+Wi-Fi provisioning, local HTTP/UI, M13 OTA, and M14 simulated-I/O session
+history software are present. M14 history is not M10 session/power recovery.
+No display, real SSR, active real temperature adapter, fan, smoke generator, or
+cloud has been added. The exact-pinned `esp-idf-lib/max31865` 1.0.8 registry
+driver is now present as M7 preparation, but production still uses the
+simulated chamber source until the physical module, RTD, wiring, reference
+resistor, and GPIO facts close the chamber part of M6B. No physical heater or hardware-safety
+behavior has been tested by the simulation/build/unit tests. The exact-pinned
+`esp-idf-lib/ads111x` 1.1.14 registry driver and its locked ESP-IDF 6 I2C
+support are also present as M9 preparation for the two selected ADS1115s.
+Production still uses simulated probes until both modules, distinct addresses,
+analog frontend, channel map, wiring, and GPIO facts are documented. The signed M13 USB
 migration, credential-free public-release download, both-slot boot, forced
 pending-image rollback, clean reinstall, five-cycle mark-valid, and persistent
 reboot passed on KFB003. The observed simulated heater command remained `0.0%`;
 this is OTA-path evidence, not a sensor, SSR, thermal, or independent
-hardware-safety test.
+hardware-safety test. The signed M14 partition migration, NVS preservation,
+minute-sample history, live target/alarm change, and reboot reconstruction also
+passed with simulated I/O; deliberate Wi-Fi-loss-during-RUNNING remains open.
 
 The controller product baseline cannot be considered complete before M6B and
 M7-M10 identify and integrate the remaining real hardware and implement
 persistence/power recovery. M6A is complete for the final SuooTci `KFB003`
-N16R8 board. M6B is blocked until the external components/design are available.
+N16R8 board. M6B has started for the chamber-driver selection and remains open
+for the physical MAX31865/RTD facts plus all other external components/design.
 Rule-by-rule evidence and deferred work are recorded in
 `docs/TRACEABILITY.md`.

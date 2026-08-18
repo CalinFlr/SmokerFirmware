@@ -53,6 +53,11 @@ The business requirement is to control chamber temperature around its target.
 
 PID/hysteresis/tuning/window timing are technical implementation choices and are not fixed by V0 business rules.
 
+D055 and M8 select Espressif's official `espressif/pid_ctrl` component for the
+future real controller. This technical selection does not change the rule:
+PID output is only a requested normalized demand, safety is applied afterward,
+and no tuning value is approved before real M6B/M7/M8 hardware validation.
+
 ## Safety rules
 
 ### SF-001 — Safety overrides everything
@@ -164,11 +169,25 @@ can call `SmokerApplication::submit()` or write heater output. `ControlTask`
 continues when connectivity initialization fails. Final-board Wi-Fi-loss testing
 during RUNNING remains required before M12 completion.
 
+M14 applies the same auxiliary boundary to history: post-cycle observations use
+a bounded drop-on-full SPSC mailbox, and `HistoryTask` alone owns storage. A
+history failure never becomes an application fault or heater/timer input.
+
+M15 applies it to Blynk as well. MQTT callbacks may only publish bounded
+transport requests and consume immutable snapshots; they cannot submit to the
+application, write heater output, or block `ControlTask`. Blynk/Internet loss
+can make remote status stale or unavailable, but cannot alter an active local
+session.
+
 ### SF-010 — No safety bypass
 
 No UI/API/debug command may bypass safety to force heater ON.
 
 Any future manual heater test must still pass through the same safety gate.
+
+Remote Blynk controls are UI commands under this rule. In particular, a remote
+Start is an ordinary `StartSessionCommand`, not a heater command, and must
+receive the application's semantic acceptance before the UI reports success.
 
 ### SF-011 — Independent hardware protection is required
 
@@ -205,6 +224,10 @@ Firmware installation and update-triggered reboot are forbidden while a session 
 M13 checks the immutable session snapshot before admission and then requires a
 correlated, semantically accepted `PrepareFirmwareUpdateCommand`. Start remains
 rejected until internal finish or successful pending-image validation.
+
+An M15 Blynk install request uses this same path. Blynk cannot stop a running
+session implicitly, override the permission result, provide another download
+URL, or force reboot as part of OTA admission.
 
 ### OTA-003
 
@@ -261,3 +284,42 @@ time makes the update fail explicitly without stopping local control. If
 `OtaTask` cannot be created on an ordinary boot, the firmware service reports
 `FAILED` and rejects check/install requests rather than accepting work that no
 task can process.
+
+## M14 history safety boundary
+
+Durable history is evidence, never an input to control or recovery. The
+post-safety `ControlTask` path may only copy a complete immutable observation
+into a preallocated SPSC mailbox; it cannot wait for storage, acquire the
+flash-operation owner, encode a record, or call a flash API. Overflow drops an
+observation and increments history health without raising an application fault.
+
+Only the low-priority core-0 `HistoryTask` writes the history partition and it
+is outside TWDT. OTA defers new history leases and serializes its flash work
+with any bounded operation already in progress. Torn/corrupt history,
+uninitialized media, repeated write failure, unavailable UTC, and Wi-Fi loss
+can make history incomplete or `DEGRADED`/`FAILED`; none may alter the session,
+timer, authoritative chamber input, safety gate, or final heater command. This
+software isolation is not evidence of sensor, SSR, thermal, or independent
+electrical-safety behavior.
+
+## M15 remote-access safety boundary
+
+Blynk is a replaceable, non-critical transport. A platform-owned low-priority
+service may connect to Blynk over MQTT/TLS, translate an allowlisted control
+into the existing bounded mailbox, and project immutable snapshots outward.
+Only `ControlTask` submits the translated command. Remote status is
+change-driven and may be delayed or dropped; no control decision may wait for
+its publication or for a Blynk acknowledgement.
+
+Status coalescing enforces a five-second minimum interval between complete
+status publications and sends nothing while the normalized projection is
+unchanged. Critical notifications and correlated command results use separate
+bounded messages, but they are evidence only. MQTT keepalive/Blynk presence is
+not an independent safety monitor.
+
+The remote command path must not restore control datastreams on reconnect. In
+particular, Start and OTA installation require a new live user action after
+every disconnect. Token loss, broker failure, quota exhaustion, notification
+failure, and stale cloud visualization fail remote access, not local control.
+Target validation with simulated inputs is not evidence that remote heating of
+the final appliance is electrically or thermally safe.

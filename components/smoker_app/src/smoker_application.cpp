@@ -121,6 +121,14 @@ void SmokerApplication::tick()
     update_active_timer(now);
     evaluate_safety(now);
 
+    session_elapsed_ = core::Duration{};
+    if (session_) {
+        const auto endpoint = session_->stopped_at.value_or(now);
+        if (endpoint >= session_->started_at) {
+            session_elapsed_ = endpoint - session_->started_at;
+        }
+    }
+
     core::HeaterDemand requested_demand = core::HeaterDemand::off();
     if (session_ && session_->status == core::SessionStatus::Running) {
         requested_demand = core::calculate_heater_demand(
@@ -151,6 +159,7 @@ SmokerSnapshot SmokerApplication::snapshot() const
 
     if (session_) {
         result.session_id = session_->id;
+        result.session_elapsed = session_elapsed_;
         result.recipe_snapshot = session_->recipe_snapshot;
         result.stop_reason = session_->stop_reason;
         result.chamber_target = session_->active_chamber_target;
@@ -183,6 +192,7 @@ SmokerSnapshotView SmokerApplication::snapshot_view() const noexcept
     SmokerSnapshotView result{
         current_session_status(),
         std::nullopt,
+        session_elapsed_,
         core::StopReason::None,
         chamber_temperature_,
         std::nullopt,

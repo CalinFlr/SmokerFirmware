@@ -131,6 +131,7 @@ private:
     core::AlarmId next_alarm_id_{1U};
     bool configuration_valid_{true};
     bool firmware_update_active_{false};
+    core::Duration session_elapsed_{};
 
     std::array<std::optional<QueuedCommand>, command_capacity> commands_{};
     std::size_t command_head_{0U};
