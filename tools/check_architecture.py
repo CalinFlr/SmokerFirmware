@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail when the M0-M13 source tree violates approved architecture boundaries."""
+"""Fail when the M0-M14 source tree violates approved architecture boundaries."""
 
 from __future__ import annotations
 
@@ -94,31 +94,36 @@ def check_control_ownership(failures: CheckFailures) -> None:
     expected_runtime = "components/smoker_platform/src/simulation_runtime.cpp"
     expected_connectivity = "components/smoker_platform/src/local_connectivity.cpp"
     expected_ota = "components/smoker_platform/src/firmware_update_service.cpp"
+    expected_history = "components/smoker_platform/src/history_service.cpp"
+    expected_history_support = "components/smoker_platform/src/history_support.cpp"
     expected_application = "components/smoker_app/src/smoker_application.cpp"
 
     task_calls = find_calls(r"\bxTaskCreate(?:Static)?(?:PinnedToCore)?\s*\(", production)
     failures.require(
-        len(task_calls) == 3,
-        "M13 must contain only ControlTask, OtaTask, and the captive DNS helper task; "
+        len(task_calls) == 4,
+        "M14 must contain only ControlTask, OtaTask, HistoryTask, and the captive DNS helper task; "
         f"found {len(task_calls)} task-creation calls",
     )
     task_owners = {relative(path) for path, _ in task_calls}
     failures.require(
-        task_owners == {expected_runtime, expected_connectivity, expected_ota},
-        "task creation must be limited to ControlTask, OtaTask, and captive DNS; "
+        task_owners == {expected_runtime, expected_connectivity, expected_ota, expected_history},
+        "task creation must be limited to ControlTask, OtaTask, HistoryTask, and captive DNS; "
         f"found owners {sorted(task_owners)}",
     )
 
     output_writes = find_calls(r"\.\s*write\s*\(", production)
+    heater_writes = [(path, offset) for path, offset in output_writes
+                     if relative(path) == expected_application]
     failures.require(
-        len(output_writes) == 2,
+        len(heater_writes) == 2,
         "the M5 composition must retain exactly the boot-OFF and final gated heater writes; "
-        f"found {len(output_writes)} member write calls",
+        f"found {len(heater_writes)} application write calls",
     )
     for path, _ in output_writes:
         failures.require(
-            relative(path) == expected_application,
-            f"heater port writes must be owned by {expected_application}, found in {relative(path)}",
+            relative(path) in {expected_application, expected_history_support},
+            "member writes must be either heater-port writes or HistoryTask-owned raw-log "
+            f"writes; found one in {relative(path)}",
         )
 
     submit_calls = find_calls(r"\.\s*submit\s*\(", production)
@@ -272,7 +277,7 @@ def check_reproducible_build_contract(failures: CheckFailures) -> None:
     )
     failures.require(
         "check_effective_sdkconfig.py" in verification,
-        "target verification must inspect the effective generated M13 configuration",
+        "target verification must inspect the effective generated M14 configuration",
     )
     flash_rejection = (ROOT / "tools/reject_unsigned_flash.cmake").read_text()
     failures.require(
@@ -290,7 +295,7 @@ def check_reproducible_build_contract(failures: CheckFailures) -> None:
         )
         and "FATAL_ERROR" in flash_rejection
         and "tools/flash_signed_firmware.py" in flash_rejection,
-        "ordinary M13 ESP-IDF flash targets must fail closed and point to the signed helper",
+        "ordinary M14 ESP-IDF flash targets must fail closed and point to the signed helper",
     )
 
 
@@ -304,6 +309,7 @@ def check_m12_transport_contract(failures: CheckFailures) -> None:
     web_assets = (ROOT / "components/smoker_platform/src/web_assets.hpp").read_text()
     decisions = (ROOT / "docs/DECISIONS.md").read_text()
     defaults = (ROOT / "sdkconfig.defaults").read_text()
+    platform_cmake = (ROOT / "components/smoker_platform/CMakeLists.txt").read_text()
     manifest = (ROOT / "components/smoker_platform/idf_component.yml").read_text()
     lock = (ROOT / "dependencies.lock").read_text()
     ignore = (ROOT / ".gitignore").read_text()
@@ -495,8 +501,8 @@ def check_m12_transport_contract(failures: CheckFailures) -> None:
         re.DOTALL,
     )
     failures.require(
-        app_script is not None and len(app_script.group(1).encode()) <= 24 * 1024,
-        "embedded app.js must remain readable but bounded to 24 KiB",
+        app_script is not None and len(app_script.group(1).encode()) <= 40 * 1024,
+        "embedded app.js must remain readable but bounded to 40 KiB",
     )
     failures.require(
         "https://" not in web_assets
@@ -523,6 +529,29 @@ def check_m12_transport_contract(failures: CheckFailures) -> None:
         and "espressif/mdns:" in lock and "version: 1.8.2" in lock
         and "version: 6.0.2" in lock,
         "dependencies.lock must pin cJSON, mDNS, and ESP-IDF",
+    )
+    failures.require(
+        'esp-idf-lib/max31865: "==1.0.8"' in manifest
+        and "esp-idf-lib__max31865" in platform_cmake
+        and "esp-idf-lib/max31865:" in lock
+        and "component_hash: c7a027843a3f9cf4b06e7e216b25b2089115568f288c8682defd84c018a5b80f"
+        in lock
+        and "version: 1.0.8" in lock,
+        "M7 preparation must retain the exact registry MAX31865 component and hash",
+    )
+    failures.require(
+        'esp-idf-lib/ads111x: "==1.1.14"' in manifest
+        and "esp-idf-lib__ads111x" in platform_cmake
+        and "esp-idf-lib/ads111x:" in lock
+        and "component_hash: fd18497adfb7210d750188986bc7cebc048db36abb64fdbe7216d4536083c4a2"
+        in lock
+        and "esp-idf-lib/i2cdev:" in lock
+        and "component_hash: ad8981cc64533dcaced5107d72e42bcebe79345e194e82795792af531b300ce3"
+        in lock
+        and "esp-idf-lib/esp_idf_lib_helpers:" in lock
+        and "component_hash: 689853bb8993434f9556af0f2816e808bf77b5d22100144b21f3519993daf237"
+        in lock,
+        "M9 preparation must retain the exact registry ADS1115 component and locked I2C support",
     )
     failures.require(
         "/managed_components/" in ignore,
@@ -650,8 +679,8 @@ def check_m12_transport_contract(failures: CheckFailures) -> None:
     decisions = (ROOT / "docs/DECISIONS.md").read_text()
     decision_ids = [int(value) for value in re.findall(r"^## D(\d{3})\b", decisions, re.MULTILINE)]
     failures.require(
-        decision_ids == list(range(1, 53)),
-        f"decision IDs must remain ordered and contiguous through D052; found {decision_ids}",
+        decision_ids == list(range(1, 58)),
+        f"decision IDs must remain ordered and contiguous through D057; found {decision_ids}",
     )
     failures.require(
         "## D051 — Missing independent release review is conditional on single-maintainer access"
@@ -668,6 +697,55 @@ def check_m12_transport_contract(failures: CheckFailures) -> None:
         and "exactly one root commit" in decisions
         and "must never turn every commit into" in decisions,
         "D052 must preserve public credential-free distribution and sanitized-root history",
+    )
+    failures.require(
+        "## D053 — M14 uses a bounded raw-flash circular session history" in decisions
+        and "commit-last" in decisions and "0x620000" in decisions
+        and "HistoryTask" in decisions and "0x5e0000" in decisions,
+        "D053 must preserve M14 storage, isolation, and layout decisions",
+    )
+    failures.require(
+        "## D054 — M15 uses Blynk as a personal MQTT relay and application" in decisions
+        and "Device MQTT API over TLS" in decisions
+        and "no periodic duplicate status" in decisions
+        and "five seconds" in decisions
+        and "sync or replay Start or OTA-install datastream values" in decisions
+        and "releases/latest/download/smoker_controller.bin" in decisions,
+        "D054 must preserve the personal Blynk, change-driven status, no-replay, and fixed-OTA boundaries",
+    )
+    failures.require(
+        "## D055 — M8 uses Espressif's official PID component behind a platform adapter"
+        in decisions
+        and "espressif/pid_ctrl" in decisions
+        and "0.3.1" in decisions
+        and "not added before M8" in decisions
+        and "smoker_platform" in decisions
+        and "synchronous safety gate is applied after PID computation" in decisions,
+        "D055 must preserve the exact-pinned official PID component, pure-core, and safety-gate boundaries",
+    )
+    failures.require(
+        "## D056 — M7 imports the registry MAX31865 driver before physical activation"
+        in decisions
+        and "esp-idf-lib/max31865" in decisions
+        and "exactly at version 1.0.8" in decisions
+        and "c7a027843a3f9cf4b06e7e216b25b2089115568f288c8682defd84c018a5b80f"
+        in decisions
+        and "max31865_measure()" in decisions
+        and "Production continues to compose `SimulatedChamberSensor`" in decisions
+        and "synchronous safety latches `ChamberSensorInvalid`" in decisions,
+        "D056 must preserve the exact-pinned MAX31865 dependency, physical gate, and fail-OFF boundary",
+    )
+    failures.require(
+        "## D057 — M9 imports the registry ADS1115 driver before physical activation"
+        in decisions
+        and "esp-idf-lib/ads111x" in decisions
+        and "exactly at version 1.1.14" in decisions
+        and "fd18497adfb7210d750188986bc7cebc048db36abb64fdbe7216d4536083c4a2"
+        in decisions
+        and "two distinct physical ADDR selections" in decisions
+        and "compose simulated probe sources" in decisions
+        and "no ADS1115 value or failure directly changes" in decisions,
+        "D057 must preserve the exact-pinned dual-ADS1115 dependency, physical gate, and monitoring-only boundary",
     )
 
     workflow = "\n".join(
@@ -811,6 +889,138 @@ def check_m12_transport_contract(failures: CheckFailures) -> None:
     )
 
 
+def check_m14_history_contract(failures: CheckFailures) -> None:
+    runtime = (ROOT / "components/smoker_platform/src/simulation_runtime.cpp").read_text()
+    history = (ROOT / "components/smoker_platform/src/history_service.cpp").read_text()
+    support = (ROOT / "components/smoker_platform/src/history_support.cpp").read_text()
+    header = (ROOT / "components/smoker_platform/include/smoker/platform/history_support.hpp").read_text()
+    coordinator = (ROOT / "components/smoker_platform/include/smoker/platform/flash_operation_coordinator.hpp").read_text()
+    ota = (ROOT / "components/smoker_platform/src/firmware_update_service.cpp").read_text()
+    connectivity = (ROOT / "components/smoker_platform/src/local_connectivity.cpp").read_text()
+    network_support = (ROOT / "components/smoker_platform/src/local_network_support.cpp").read_text()
+    web_assets = (ROOT / "components/smoker_platform/src/web_assets.hpp").read_text()
+    tests = (ROOT / "tests/host/smoker_m14_tests.cpp").read_text()
+    partitions = (ROOT / "partitions.csv").read_text()
+
+    tick = runtime.find("context->application.tick();")
+    publish = runtime.find("context->snapshots.publish(snapshot)", tick)
+    observe = runtime.find("context->history_mailbox.observe(snapshot)", publish)
+    failures.require(
+        tick >= 0 and publish > tick and observe > publish,
+        "ControlTask must publish history only after the safety-gated tick and snapshot",
+    )
+    control_loop = source_section(runtime, "void control_task(", "bool start_simulation_runtime(")
+    failures.require(
+        bool(control_loop)
+        and "history_mailbox.observe(snapshot)" in control_loop
+        and "synchronized_unix_utc_now" not in control_loop
+        and "esp_partition_" not in control_loop
+        and "FlashOperationCoordinator" not in control_loop
+        and "std::mutex" not in control_loop,
+        "ControlTask history publication must not perform flash I/O or synchronization",
+    )
+    failures.require(
+        "history_mailbox_capacity = 16U" in header
+        and "std::array<Slot, history_mailbox_capacity>" in header
+        and "std::atomic<std::uint32_t> write_sequence_" in header
+        and "std::atomic<std::uint32_t> read_sequence_" in header
+        and "std::atomic<std::uint64_t>" not in header,
+        "history transport must remain a preallocated native-atomic 16-entry SPSC mailbox",
+    )
+    failures.require(
+        "history_periodic_sample_interval{60'000}" in header
+        and "history_change_coalesce_interval" not in header
+        and "HistoryObservationKind::Start" in support
+        and "HistoryObservationKind::Sample" in support
+        and "HistoryObservationKind::Change" in support
+        and "HistoryObservationKind::End" in support,
+        "M14 start/sample/change/end observation policy is missing",
+    )
+    failures.require(
+        "DRAM_ATTR StaticTask_t history_task_storage" in history
+        and "DRAM_ATTR std::array<StackType_t" in history
+        and '"HistoryTask"' in history
+        and re.search(
+            r'xTaskCreateStaticPinnedToCore\(.*?"HistoryTask".*?\n\s*0\s*\n\s*\);',
+            history,
+            re.DOTALL,
+        ) is not None
+        and "esp_task_wdt_add" not in history,
+        "HistoryTask must use static internal DRAM, core 0, low priority, and stay outside TWDT",
+    )
+    failures.require(
+        "esp_partition_write" in history
+        and "esp_partition_erase_range" in history
+        and "esp_partition_write" not in support
+        and "esp_partition_erase_range" not in support,
+        "only the HistoryTask adapter may own raw history-partition flash APIs",
+    )
+    failures.require(
+        "commit_marker" in support and "eviction_marker" in support and "crc32(" in support
+        and "next_generation_" in header and "erase_sector" in support
+        and "choose_oldest(true, true)" in support
+        and "complete_pending_eviction" in support
+        and "summary.truncated" in support,
+        "raw history recovery, commit-last, eviction, and truncation contracts are missing",
+    )
+    failures.require(
+        "try_acquire_history" in coordinator and "try_acquire_ota" in coordinator
+        and "history_deferred_" in coordinator
+        and "OtaFlashLease" in ota and "HistoryFlashLease" in history
+        and "deadline.expired(esp_timer_get_time())" in ota,
+        "history and OTA flash operations must share the platform-owned coordinator",
+    )
+    failures.require(
+        "}\n            static_cast<void>(ulTaskNotifyTake" in history,
+        "HistoryTask must release its flash lease before its idle wait",
+    )
+    failures.require(
+        "std::optional<HistoryObservation> pending_lifecycle" in history
+        and "observation.kind == HistoryObservationKind::Start" in history
+        and "observation.kind == HistoryObservationKind::End" in history
+        and "pending_lifecycle = observation" in history,
+        "HistoryTask must retain failed START/END lifecycle records for durable retry",
+    )
+    failures.require(
+        re.search(
+            r"^history,\s*data,\s*0x40,\s*0x620000,\s*0x400000,?\s*$",
+            partitions,
+            re.MULTILINE,
+        ) is not None,
+        "M14 must retain the exact 4 MiB history partition at 0x620000",
+    )
+    failures.require(
+        connectivity.count('std::pair{"/api/v1/history/sessions", HTTP_GET}') == 1
+        and connectivity.count('std::pair{"/api/v1/history/samples", HTTP_GET}') == 1
+        and "parse_history_sessions_query" in network_support
+        and "parse_history_samples_query" in network_support
+        and "httpd_resp_send_chunk" in connectivity,
+        "authenticated read-only history routes must use strict parsers and chunked JSON",
+    )
+    failures.require(
+        'id="history-chart"' in web_assets and "refreshHistory" in web_assets
+        and "loadHistorySamples" in web_assets
+        and "const historyPointBudget = 1200" in web_assets
+        and "while (after !== null)" in web_assets
+        and "item.kind === 'SAMPLE'" in web_assets
+        and "item.kind === 'CHANGE'" in web_assets
+        and "historyLoadToken" in web_assets
+        and "https://" not in web_assets and "http://" not in web_assets,
+        "the bounded embedded history dashboard contract is missing",
+    )
+    for evidence in (
+        "test_empty_random_and_reboot",
+        "test_torn_and_corrupt_records",
+        "test_pagination_and_stride",
+        "test_rollover_eviction_truncation_and_interruption",
+        "test_sampling_and_mailbox_saturation",
+        "test_flash_operation_serialization",
+        "test_mailbox_concurrency",
+        "test_strict_history_queries",
+    ):
+        failures.require(evidence in tests, f"M14 host evidence is missing: {evidence}")
+
+
 def main() -> int:
     failures = CheckFailures()
     check_layer_includes(failures)
@@ -819,6 +1029,7 @@ def main() -> int:
     check_v0_scope(failures)
     check_reproducible_build_contract(failures)
     check_m12_transport_contract(failures)
+    check_m14_history_contract(failures)
     return failures.finish()
 
 

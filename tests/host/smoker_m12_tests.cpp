@@ -111,6 +111,7 @@ SmokerSnapshotView snapshot_with_generation(
     return SmokerSnapshotView{
         smoker::core::SessionStatus::Running,
         generation,
+        smoker::core::Duration{generation},
         smoker::core::StopReason::None,
         current,
         current,

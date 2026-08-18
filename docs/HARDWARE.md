@@ -2,7 +2,7 @@
 
 Status: **M6A complete; M6B external hardware incomplete**
 
-Last evidence update: **2026-08-17**
+Last evidence update: **2026-08-18**
 
 This file is the canonical inventory for every physical component used by the
 product. It is written so that a human or an AI agent can distinguish an
@@ -63,7 +63,12 @@ before either gate is marked complete.
 - Development framework: native ESP-IDF.
 - Final controller board: SuooTci ESP32-S3, seller code `KFB003` / eMAG
   product `D1T7M22BM`, using the user-reported N16R8 module variant.
-- External sensor/probe boards and the SSR interface are not yet available.
+- MAX31865 with a three-wire PT100 is selected by the user as the first chamber
+  frontend to connect; the exact physical module/revision and remaining RTD
+  assembly facts are not yet documented.
+- Two ADS1115 converters are selected by the user for the external analog/probe
+  path; their exact modules, addresses, channel roles, probe circuits, and
+  wiring are not yet documented. The SSR interface is not yet identified.
 - The project will eventually control an electric smoker heater.
 - Real chamber sensing, food-probe integration, SSR wiring, independent thermal/electrical protection, current sensing, fan control, and smoke-source integration are separate hardware milestones.
 
@@ -72,8 +77,8 @@ before either gate is marked complete.
 | ID | Product role | Selected component | Current classification | Integration status |
 |---|---|---|---|---|
 | `CTRL-001` | Main controller | SuooTci `KFB003` / eMAG `D1T7M22BM`; N16R8 variant reported | Carrier identity **CONFIRMED FROM DOCUMENTATION**; SoC/storage/USB **CONFIRMED FROM HARDWARE** | M6A complete; simulated I/O only |
-| `CHAMBER-001` | Authoritative chamber sensor/frontend | Not selected | **UNCONFIRMED** | Blocked at M6B |
-| `PROBES-001` | Food-probe frontend | Not selected | **UNCONFIRMED** | Blocked at M6B |
+| `CHAMBER-001` | Authoritative chamber sensor/frontend | MAX31865 with PT100, three-wire; exact physical module and remaining RTD facts pending | Converter/RTD/wire choices **CONFIRMED FROM DOCUMENTATION** — user selection; module/electrical facts **UNCONFIRMED** | Registry driver imported; adapter/wiring blocked at M6B/M7 |
+| `PROBES-001` | Food-probe analog acquisition | Two ADS1115 converters selected; complete probe frontend and channel map pending | Converter quantity/type **CONFIRMED FROM DOCUMENTATION** — user selection; modules/electrical design **UNCONFIRMED** | Registry driver imported; adapter/wiring blocked at M6B/M9 |
 | `HEATER-001` | SSR/heater power interface | Not selected | **UNCONFIRMED** | Blocked at M6B; no GPIO assigned |
 | `SAFETY-001` | Independent thermal/electrical cutoff | Not designed | **UNCONFIRMED** | Required at M6B |
 | `POWER-001` | Product power supply/rails | Not selected | **UNCONFIRMED** | Blocked at M6B |
@@ -98,6 +103,117 @@ Until each board/component fact is confirmed:
 Use simulated sensor/probe/heater adapters until the corresponding M6B hardware
 is confirmed. M6A may exercise only the controller board and its integrated
 capabilities; this does not validate external control hardware.
+
+## `CHAMBER-001` — MAX31865 chamber-frontend dossier
+
+### Selection and software boundary
+
+The user selected MAX31865 on 2026-08-18 as the first external device to
+connect and as the intended authoritative chamber frontend, then identified
+the RTD as PT100 with three leads. This fixes the future driver choices to
+`rtd_nominal = 100.0F` and `MAX31865_3WIRE`. It does not identify the purchased
+breakout-board manufacturer, revision, fitted reference resistor, PT100
+accuracy/range/construction, or connector pinout.
+
+ESP-IDF 6.0.2 contains the SPI master driver but no built-in MAX31865 device
+driver. The project therefore uses the next approved dependency source, ESP
+Component Registry:
+
+| Item | Finding | Classification |
+|---|---|---|
+| Driver | `esp-idf-lib/max31865` 1.0.8, BSD-3 | **CONFIRMED FROM CONFIG** — exact manifest pin |
+| Registry identity | component hash `c7a027843a3f9cf4b06e7e216b25b2089115568f288c8682defd84c018a5b80f` | **CONFIRMED FROM CONFIG** — `dependencies.lock` |
+| Upstream source | release commit `79566bd59420b03ab999c124f012a93a63f3a7db`; supports `esp32s3`; release includes the ESP-IDF 6 driver split | **CONFIRMED FROM DOCUMENTATION** — registry metadata and upstream release history |
+| Driver capabilities | SPI descriptor/configuration, PT100/PT1000 nominal values, 2/3/4-wire configuration, 50/60 Hz filter selection, raw/temperature reads, and MAX31865 fault access | **CONFIRMED FROM DOCUMENTATION** — versioned public header/source |
+| Current firmware use | dependency is compiled but production still composes `SimulatedChamberSensor` | **CONFIRMED FROM CONFIG** |
+
+The future M7 adapter remains in `smoker_platform` behind the existing
+`IChamberSensor` port. It will not create a sensor task. The component's
+`max31865_measure()` helper contains a 70 ms task delay and is not approved for
+direct use in the critical cycle. M7 must instead validate a bounded continuous
+read or a non-blocking staged single-shot design. Any driver error, reported
+fault, or invalid/non-finite result becomes an absent authoritative reading;
+the existing synchronous safety path then latches fault and forces heater OFF.
+
+### Physical facts still required before the adapter or pin assignment
+
+| Item | Current finding | Classification |
+|---|---|---|
+| Breakout manufacturer/product/revision/markings | Not recorded | **UNCONFIRMED** |
+| Procurement source and final-product status | Not recorded | **UNCONFIRMED** |
+| Module supply and logic-voltage behavior | Not recorded; chip-level ratings do not prove breakout behavior | **UNCONFIRMED** |
+| RTD element | PT100; nominal driver value 100 Ω at 0 °C. Accuracy class, range, sheath, and cable are not recorded | PT100 choice **CONFIRMED FROM DOCUMENTATION** — user; remaining construction facts **UNCONFIRMED** |
+| Lead configuration | Three-wire | **CONFIRMED FROM DOCUMENTATION** — user selection |
+| Fitted reference resistor | Nominal value and tolerance not recorded | **UNCONFIRMED** |
+| SPI and connector pinout | Not recorded | **UNCONFIRMED** |
+| ESP32-S3 GPIO assignment | None; must be checked against `CTRL-001` restrictions | **UNCONFIRMED** |
+| Boot-state behavior and safe power sequencing | Not tested | **UNCONFIRMED** |
+| Accuracy/noise/fault behavior | No connected open/short, ambient, reference-temperature, sustained-run, or heater-noise test | **UNCONFIRMED** |
+
+Primary software references:
+
+- [ESP Component Registry: esp-idf-lib/max31865 1.0.8](https://components.espressif.com/components/esp-idf-lib/max31865/versions/1.0.8/readme)
+- [Versioned upstream source](https://github.com/esp-idf-lib/max31865/tree/79566bd59420b03ab999c124f012a93a63f3a7db)
+- [Analog Devices MAX31865 datasheet](https://www.analog.com/media/en/technical-documentation/data-sheets/max31865.pdf) — chip-level authority only; not a schematic for the unknown breakout
+
+## `PROBES-001` — dual ADS1115 acquisition dossier
+
+### Selection and software boundary
+
+The user selected two ADS1115 converters on 2026-08-18. This fixes the ADC
+type and quantity but does not identify either physical module or complete the
+food-probe frontend. In particular, it does not define which probe/signal uses
+each channel, the probe resistance curve, excitation/bias network, input
+protection/filtering, gain, rate, or voltage-to-temperature calibration.
+
+ESP-IDF 6.0.2 supplies the I2C master driver but no ADS1115 device driver. The
+project therefore uses ESP Component Registry rather than copying a register
+implementation:
+
+| Item | Finding | Classification |
+|---|---|---|
+| Driver | `esp-idf-lib/ads111x` 1.1.14, BSD-3 | **CONFIRMED FROM CONFIG** — exact manifest pin |
+| Registry identity | component hash `fd18497adfb7210d750188986bc7cebc048db36abb64fdbe7216d4536083c4a2` | **CONFIRMED FROM CONFIG** — `dependencies.lock` |
+| Upstream source | release commit `9eb6f607662518f1bdd3a3b88629db720b765b8e`; explicitly targets `esp32s3` | **CONFIRMED FROM DOCUMENTATION** — registry metadata and versioned source |
+| Locked support components | `esp-idf-lib/i2cdev` 2.1.2 (`ad8981cc64533dcaced5107d72e42bcebe79345e194e82795792af531b300ce3`) and `esp-idf-lib/esp_idf_lib_helpers` 1.4.0 (`689853bb8993434f9556af0f2816e808bf77b5d22100144b21f3519993daf237`) | **CONFIRMED FROM CONFIG** — resolved lockfile closure |
+| Driver capabilities | ADS1115 input mux, programmable gain, 8..860 SPS data rate, single-shot/continuous modes, explicit start/busy/value operations, thresholds, and comparator configuration | **CONFIRMED FROM DOCUMENTATION** — versioned public header/source |
+| Two-device support | Upstream versioned example constructs two descriptors on one I2C bus with distinct ADDR straps | **CONFIRMED FROM DOCUMENTATION** — example; its GND/VCC choices are not project pin assignments |
+| ESP-IDF 6 build path | locked `i2cdev` selects ESP-IDF 6's new `i2c_master` driver | **CONFIRMED FROM CONFIG** — fresh ESP32-S3 configure/build output |
+| Current firmware use | dependencies compile, but production continues to compose simulated probe sources | **CONFIRMED FROM CONFIG** |
+
+Two devices can share a bus only when their physical ADDR straps select two
+different addresses from the ADS1115 set `0x48`, `0x49`, `0x4a`, and `0x4b`.
+No address, I2C port, SDA/SCL GPIO, pull-up, speed, channel, gain, or sampling
+choice is made by importing the driver.
+
+The future M9 implementation remains in `smoker_platform` behind the existing
+`IFoodProbeSource` port and creates no sensor task. The driver exposes separate
+start, readiness, and value operations, so conversion work can be staged and
+bounded in the existing control schedule after the actual frontend is known.
+An I2C/conversion/validity failure becomes an absent reading for the affected
+monitoring probe. Per BR-005/SF-008, it may produce a probe alarm but never
+controls the heater or becomes the authoritative chamber measurement.
+
+### Physical facts still required before the adapter or pin assignment
+
+| Item | Current finding | Classification |
+|---|---|---|
+| Module manufacturer/product/revision/markings | Neither module is recorded | **UNCONFIRMED** |
+| Procurement source and final-product status | Not recorded | **UNCONFIRMED** |
+| Supply and logic-voltage behavior | Not recorded; chip ratings do not prove breakout behavior | **UNCONFIRMED** |
+| ADDR straps / I2C addresses | Two distinct addresses required; neither physical strap is recorded | **UNCONFIRMED** |
+| I2C bus | Port, SDA/SCL, pull-up rail/values, bus length, capacitance, and speed not selected | **UNCONFIRMED** |
+| Signal/probe channel map | Purpose of each ADC and AIN0..AIN3 assignment not recorded | **UNCONFIRMED** |
+| Analog frontend | Probe types, bias/excitation, source impedance, filtering, protection, and valid voltage range not recorded | **UNCONFIRMED** |
+| Conversion policy | Single-ended/differential mode, gain, data rate, scheduling, and calibration not selected | **UNCONFIRMED** |
+| ESP32-S3 GPIO assignment | None; must be checked against `CTRL-001` restrictions | **UNCONFIRMED** |
+| Connected behavior | No address scan, known-voltage, accuracy, noise, disconnect/short, sustained-run, or heater-interference test | **UNCONFIRMED** |
+
+Primary software references:
+
+- [ESP Component Registry: esp-idf-lib/ads111x 1.1.14](https://components.espressif.com/components/esp-idf-lib/ads111x/versions/1.1.14/readme)
+- [Versioned upstream source](https://github.com/esp-idf-lib/ads111x/tree/9eb6f607662518f1bdd3a3b88629db720b765b8e)
+- [TI ADS1115 datasheet](https://www.ti.com/lit/ds/symlink/ads1115.pdf) — chip-level authority only; not a schematic for either unknown module or probe frontend
 
 ## `CTRL-001` — SuooTci controller-board dossier
 
@@ -278,13 +394,14 @@ design evidence:
 Final sensor/probe/SSR pin assignments require both the M6A pin restrictions
 and the corresponding M6B interface facts.
 
-## OTA partition note
+## OTA/history partition note
 
-Do not create a final custom OTA `partitions.csv` before M13 designs and
-validates rollback behavior. M6A has confirmed the 16 MiB target capacity. M12
-uses ESP-IDF's built-in 1500 KiB single-app layout to restore firmware growth
-margin; this is not an OTA-capable product layout.
+M6A confirmed 16 MiB flash. M13 target-validated rollback with the preserved
+24 KiB NVS range, `otadata`, `phy_init`, and two 3 MiB OTA slots. M14 retains
+those offsets and assigns the next 4 MiB to the raw `history` log, leaving
+`0x5e0000` bytes unallocated.
 
-The final product partition layout must be OTA/rollback-capable. A provisional
-layout used on a development board must be labeled as such and revalidated for
-the final product module.
+Changing either the former M12 single-app table or the M13 dual-slot table
+requires the signed full-serial helper; application OTA cannot migrate a
+partition table. M14 connected-target persistence/flash validation remains a
+separate gate and is not sensor, SSR, thermal, or electrical-safety evidence.

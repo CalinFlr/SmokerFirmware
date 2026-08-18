@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the exact M13 rollback-capable partition contract."""
+"""Validate the exact M14 rollback/history partition contract."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ EXPECTED = [
     ("phy_init", "data", "phy", 0x11000, 0x1000),
     ("ota_0", "app", "ota_0", 0x20000, 0x300000),
     ("ota_1", "app", "ota_1", 0x320000, 0x300000),
+    ("history", "data", "0x40", 0x620000, 0x400000),
 ]
 
 
@@ -41,25 +42,31 @@ def main() -> int:
                 continue
             if len(raw) < 5:
                 raise SystemExit("partition row has fewer than five columns")
+            subtype = raw[2].strip()
+            if raw[0].strip() == "history":
+                subtype = f"{number(subtype):#x}"
             rows.append(
                 (
                     raw[0].strip(),
                     raw[1].strip(),
-                    raw[2].strip(),
+                    subtype,
                     number(raw[3]),
                     number(raw[4]),
                 )
             )
 
     if rows != EXPECTED:
-        raise SystemExit(f"unexpected M13 partition table: {rows!r}")
+        raise SystemExit(f"unexpected M14 partition table: {rows!r}")
     for left, right in zip(rows, rows[1:]):
         if left[3] + left[4] > right[3]:
             raise SystemExit(f"overlapping partitions: {left[0]} and {right[0]}")
     if rows[-1][3] + rows[-1][4] > 16 * 1024 * 1024:
         raise SystemExit("partition table exceeds target-confirmed 16 MiB flash")
 
-    print("M13 partition table: PASS (two 3 MiB OTA slots; remainder unallocated)")
+    unallocated = 16 * 1024 * 1024 - (rows[-1][3] + rows[-1][4])
+    if unallocated != 0x5E0000:
+        raise SystemExit(f"unexpected unallocated flash: {unallocated:#x}")
+    print("M14 partition table: PASS (dual 3 MiB OTA; 4 MiB history; 0x5e0000 free)")
     return 0
 
 

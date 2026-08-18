@@ -80,7 +80,8 @@ def main() -> int:
                 "foreign captive Host must canonicalize to the AP root")
         for forbidden in ("login", "api/v1/snapshot", "api/v1/commands",
                           "api/v1/firmware", "api/v1/firmware/check",
-                          "api/v1/firmware/install"):
+                          "api/v1/firmware/install", "api/v1/history/sessions",
+                          "api/v1/history/samples?history_id=102"):
             blocked = response(urllib.request.Request(
                 f"{ap}/{forbidden}", headers={"Cookie": "smoker_session=" + "1" * 64}
             ))
@@ -146,6 +147,31 @@ def main() -> int:
             f"{sta}/api/v1/snapshot", headers={"Cookie": token_cookie}
         )).status == 200, "cookie must unlock STA snapshot")
 
+        history_sessions_response = response(urllib.request.Request(
+            f"{sta}/api/v1/history/sessions?limit=32", headers={"Cookie": token_cookie}
+        ))
+        history_payload = json.loads(history_sessions_response.read())
+        require(history_sessions_response.status == 200
+                and history_payload["sessions"][0]["history_id"] == "102"
+                and history_payload["status"] == "DEGRADED",
+                "authenticated STA must expose newest-first history and health")
+        require(response(urllib.request.Request(
+            f"{sta}/api/v1/history/sessions?limit=1&limit=2",
+            headers={"Cookie": token_cookie},
+        )).status == 400, "history sessions must reject duplicate query fields")
+        require(response(urllib.request.Request(
+            f"{sta}/api/v1/history/samples?history_id=102&limit=60&stride=2",
+            headers={"Cookie": token_cookie},
+        )).status == 200, "history samples must accept strict pagination and stride")
+        require(response(urllib.request.Request(
+            f"{sta}/api/v1/history/samples?history_id=102&unknown=1",
+            headers={"Cookie": token_cookie},
+        )).status == 400, "history samples must reject unknown query fields")
+        require(response(urllib.request.Request(
+            f"{sta}/api/v1/history/sessions?limit=32",
+            headers={"Cookie": token_cookie, "Origin": "http://attacker.invalid"},
+        )).status == 403, "history GET must reject a supplied foreign Origin")
+
         firmware_missing_origin = response(urllib.request.Request(
             f"{sta}/api/v1/firmware", headers={"Cookie": token_cookie}
         ))
@@ -182,14 +208,14 @@ def main() -> int:
                 "manual firmware check accepts authenticated exact-Origin STA")
         invalid_firmware = json_request(
             f"{sta}/api/v1/firmware/install", "POST",
-            b'{"version":"0.13.1","extra":true}',
+            b'{"version":"0.14.1","extra":true}',
             {"Cookie": token_cookie, "Origin": sta},
         )
         require(invalid_firmware.status == 400,
                 "firmware install rejects unknown JSON fields")
         install_firmware = json_request(
             f"{sta}/api/v1/firmware/install", "POST",
-            b'{"version":"0.13.1"}',
+            b'{"version":"0.14.1"}',
             {"Cookie": token_cookie, "Origin": sta},
         )
         require(install_firmware.status == 202,
@@ -253,7 +279,7 @@ def main() -> int:
             f"{sta}/api/v1/snapshot", headers={"Cookie": new_cookie}
         )).status == 401, "logged-out token must be rejected")
 
-        print("M12/M13 commissioning, session, and firmware HTTP fixture: PASS")
+        print("M12-M14 commissioning, session, firmware, and history HTTP fixture: PASS")
         return 0
     finally:
         process.terminate()

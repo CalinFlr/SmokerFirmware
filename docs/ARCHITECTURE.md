@@ -74,7 +74,7 @@ Do not create ports before a milestone needs them.
 
 ESP-IDF/hardware-specific implementations.
 
-Current M13 implementations:
+Current M14 implementations:
 
 - simulated chamber/probe sources;
 - simulated heater output;
@@ -88,11 +88,20 @@ Current M13 implementations:
 - one static low-priority core-0 `OtaTask` for SNTP, HTTPS OTA, image
   verification, boot selection, and rollback, with application permission
   crossing only bounded command/snapshot transports.
+- a 16-entry SPSC history-observation mailbox and one static low-priority
+  core-0 `HistoryTask` owning a versioned raw-flash circular log and read-only
+  history queries. Storage failure is observable but never enters control or
+  safety state.
 
 Future examples:
 
-- MAX31865-based chamber source;
-- real food-probe adapter;
+- MAX31865-based chamber source. The exact-pinned registry driver is present,
+  but its `smoker_platform` adapter and runtime activation remain gated on the
+  physical M6B chamber record;
+- M8 `espressif/pid_ctrl` adapter behind an application-owned control port;
+- dual-ADS1115 food-probe acquisition. The exact-pinned registry driver is
+  present, but its `smoker_platform` adapter and runtime activation remain
+  gated on the physical M6B module/address/frontend record;
 - SSR heater output;
 - NVS session/config store;
 - ESP clock/reset-reason adapter;
@@ -126,7 +135,7 @@ Its job is to:
 
 Business rules do not belong in `app_main.cpp`.
 
-At M13, `app_main` composes the built-in simulation configuration and delegates
+At M14, `app_main` composes the built-in simulation configuration and delegates
 task/runtime mechanics to `smoker_platform`.
 
 ## Runtime-state ownership
@@ -255,6 +264,9 @@ M13 adds the application-owned Boolean `firmware_update_active` to both snapshot
 forms. It is an interlock, not a new `SessionStatus`: while true, Start is
 rejected. Installation permission cannot be obtained during `RUNNING`.
 
+M14 adds `session_elapsed` to both snapshot forms. It is computed from monotonic
+session points by `SmokerApplication`; history never derives duration from UTC.
+
 ## Probe configuration ownership
 
 M5 keeps immutable device/default probe configuration separate from mutable
@@ -288,6 +300,13 @@ Do not split V0 into separate:
 - timer task;
 - session task.
 
+M8 retains this concurrency model. The Espressif PID component is called
+synchronously through a `smoker_platform` adapter by the owning `ControlTask`;
+it does not own a task or bypass `SmokerApplication`. Its requested normalized
+demand proceeds through the same synchronous safety gate before the sole final
+heater write. The platform placement contains the component's ESP-IDF types and
+keeps `smoker_core` host-portable.
+
 A conceptual control cycle:
 
 ```text
@@ -313,15 +332,22 @@ behavior appropriate to their adapter. `IEventSink::publish()` must enqueue or
 store locally without network/storage I/O. A future network/storage consumer
 must run outside the critical dependency chain.
 
-At M13 the `ControlTask` retains its static 12 KiB stack and priority and is
+At M14 the `ControlTask` retains its static 12 KiB stack and priority and is
 pinned to core 1. Wi-Fi, TCP/IP, the default event loop, fallback timer, HTTP
-server, and the only auxiliary task—a static 4 KiB captive DNS responder—run on
-core 0. The DNS task exists only while SoftAP is active and never submits
+server, and the only connectivity helper task—a static 4 KiB captive DNS
+responder—run on core 0. The DNS task exists only while SoftAP is active and never submits
 commands. Connectivity initialization failure is logged but does not prevent
 local control from starting. M13 adds one static 16 KiB low-priority `OtaTask`
 on core 0. It is not subscribed to TWDT and all SNTP, HTTPS, and flash work stays
 outside `ControlTask`; only atomic bounded signals and immutable snapshots
 cross that boundary.
+
+M14 adds one static 12 KiB low-priority `HistoryTask` on core 0, also outside
+TWDT. `ControlTask` publishes only a preallocated, 32-bit-sequenced SPSC
+observation after the safety-gated tick and immutable snapshot publication. It
+never reads UTC, locks a mutex, allocates, logs, queries flash, or waits for
+history. A full mailbox drops an observation and increments an observable
+counter.
 
 ## M12 local HTTP and credential boundary
 
@@ -433,9 +459,10 @@ later AP start may reuse that storage.
 
 `espressif/cjson` supplies JSON parsing/serialization and `espressif/mdns`
 supplies discovery without a display. Registry versions and hashes are locked;
-generated components stay ignored. M13 uses a custom table with the preserved
-24 KiB NVS partition, `otadata`, `phy_init`, and two 3 MiB OTA slots. The
-remaining confirmed 16 MiB flash is intentionally unallocated. Build
+generated components stay ignored. M14 retains the preserved 24 KiB NVS
+partition, `otadata`, `phy_init`, and two 3 MiB OTA slots, then assigns a 4 MiB
+raw `history` partition. The remaining `0x5e0000` bytes of the confirmed 16 MiB
+flash stay intentionally unallocated. Build
 verification limits the application to 75% of either slot. Moving from M12's
 single-app layout requires a complete serial flash. The serial helper rejects
 stale generated configuration and unsigned or build-mismatched applications,
@@ -524,6 +551,122 @@ all firmware routes. Check admission uses a prebuilt fixed `202` body, so a
 local JSON allocation failure cannot report `503` after the check has started;
 network delivery can still fail after admission as with any request.
 
+## M14 durable history boundary
+
+History is a platform-owned auxiliary projection of immutable post-control
+snapshots. It is not application recovery state and adds no command or mutable
+runtime owner:
+
+```text
+ControlTask (core 1)
+    -> post-tick SmokerSnapshotView
+    -> bounded SPSC observation mailbox (drop, never wait)
+    -> HistoryTask (core 0)
+    -> 4 MiB raw circular flash log
+
+authenticated operational HTTP
+    -> bounded read-only query
+    -> HistoryTask-owned log state
+```
+
+A session writes a committed START, immediate complete CHANGE records, periodic
+SAMPLE records every 60 seconds while RUNNING, and one complete END. Idle
+snapshots are not stored. Records contain monotonic
+session elapsed time; credible synchronized Unix UTC is attached by
+`HistoryTask` when available and remains optional.
+
+If Start is followed by Stop or a safety FAULT inside one control cycle, the
+post-control projection first sees a terminal session. The mailbox admits its
+START+END pair only when two slots are available, or retries the unchanged
+terminal snapshot without publishing a partial lifecycle. `HistoryTask` also
+retains a failed flash START or END ahead of later mailbox records until that
+lifecycle write succeeds; a transient START failure therefore cannot turn its
+END into an orphan or starve future sessions.
+
+The log uses 4 KiB erase-sector/pages. Page and record headers are versioned,
+CRC checked, and committed last, and records never cross a page. Startup scans
+the partition and ignores unclaimed media. Torn or corrupt tails degrade health
+without inventing records. Before erasing a multi-page victim, the log commits
+an eviction tombstone in reserved page-header space. That tombstone hides the
+whole victim and survives until every other victim page is erased; startup
+conservatively treats partial NOR program/erase states of that word as an
+eviction in progress and finishes it before serving queries. Whole completed
+sessions are therefore evicted atomically and oldest first; an interrupted
+session may be evicted next, and only a single partition-filling active session
+loses its oldest page and becomes explicitly truncated. No fixed retention
+duration is promised.
+
+History and OTA use a platform-only flash-operation coordinator. OTA first
+defers new history work, waits only within its total install deadline for the
+current bounded operation, and then owns flash until completion/reboot. Neither
+side calls the application or changes heater state. NVS remains a separate
+ESP-IDF persistence concern.
+
+History APIs are authenticated operational-STA GETs with strict bounded query
+schemas, 64-bit IDs encoded as decimal JSON strings, pagination/stride, and
+chunked bounded response formatting. Commissioning rejects them before
+authentication. There is no history write/delete/export/cloud endpoint in M14.
+
+## M15 personal Blynk remote-access boundary
+
+M15 adds one non-critical `smoker_platform` adapter around the official
+ESP-MQTT component and Blynk Device MQTT API. It is a transport adapter, not a
+new state owner or control service:
+
+```text
+Blynk app
+    <-> Blynk Cloud Device MQTT/TLS
+    <-> platform Blynk adapter on core 0
+         -> bounded external command mailbox
+         -> ControlTask on core 1 -> SmokerApplication -> safety -> heater
+
+ControlTask
+    -> immutable snapshot exchange
+    -> platform Blynk adapter
+    -> normalized batch status / correlated result / configured event
+```
+
+MQTT callback context never calls `SmokerApplication::submit()`. It validates
+and translates only allowlisted datastream controls, assigns the existing
+bounded correlation identity, and attempts bounded mailbox admission. Only
+`ControlTask` drains that mailbox and submits the command. A transport-level
+publish or delivery acknowledgment is never presented as semantic command
+acceptance.
+
+The outbound status adapter retains one fixed-size normalized projection, one
+dirty flag, the last successful status-publish monotonic point, and bounded
+serialization storage. On connect/reconnect it publishes one current complete
+projection. Later snapshot observations mark the projection dirty only when a
+normalized user-visible value differs. Status publication is suppressed until
+five seconds have elapsed since the previous status publication, and all
+intervening changes collapse into the newest complete `batch_ds`. With no
+change, no status publish is scheduled. MQTT keepalive/presence owns connection
+liveness; it is not emulated with duplicate telemetry.
+
+Correlated command results and configured Blynk events use separate bounded
+messages and may publish immediately. They do not mutate the cached projection
+or force an unchanged batch. Publish failure leaves the newest projection dirty
+for a later connected attempt but never blocks or feeds back into control.
+
+Control datastreams are edge-triggered transport inputs. The adapter does not
+request, replay, or synchronize saved Start or OTA-install values after a
+reconnect. A new live Blynk user action is required. State/configuration
+datastreams may expose current application values, but Blynk never owns the
+authoritative runtime configuration.
+
+The firmware-update control invokes the existing M13 check/install service.
+The Blynk payload contains no URL or binary; the platform continues to download
+the fixed public GitHub `releases/latest` asset, obtain application permission,
+verify the signed ESP32-S3 image, install only outside `RUNNING`, and use the
+existing rollback policy. M14 raw history remains local; Blynk datastream
+retention is only an auxiliary visualization cache and is not backfilled.
+
+The device token and regional endpoint are platform configuration. The token
+is a non-versioned secret and never enters snapshots, logs, browser assets,
+events, command results, or repository evidence. Blynk loss, credential
+failure, broker throttling, or quota exhaustion cannot become a dependency of
+the heater-control path.
+
 ## Safety in the control cycle
 
 Conceptually:
@@ -603,13 +746,16 @@ External sensing/output and electrical-safety gates remain M6B work.
 
 ### Executable architecture guardrails
 
-`tools/check_architecture.py` enforces the M0-M13 layer imports, component graph,
-the sole critical `ControlTask` plus the captive-DNS helper and one `OtaTask`,
+`tools/check_architecture.py` enforces the M0-M14 layer imports, component graph,
+the sole critical `ControlTask` plus the captive-DNS helper, `OtaTask`, and
+`HistoryTask`,
 heater-write owner, single production command-submit site, M12
 transport/core-placement contracts, M13 effective generated configuration,
 signed serial-flash/release contracts, partitions/update placement, exact V0
 session states/command family, single-stage recipe shape, and thin composition
-root.
+root. M14 checks additionally cover 32-bit/non-blocking history publication,
+absence of wall-clock/flash work from `ControlTask`, raw-log ownership,
+authenticated read-only routes, and OTA/history serialization.
 `tools/check_traceability.py` requires one explicit matrix row
 for every approved rule and validates concrete host-test references for rules
 marked implemented.

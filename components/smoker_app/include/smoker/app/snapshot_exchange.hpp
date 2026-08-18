@@ -50,6 +50,7 @@ private:
     struct Slot final {
         core::SessionStatus session_status{core::SessionStatus::Idle};
         std::optional<core::SessionId> session_id;
+        core::Duration session_elapsed{};
         core::StopReason stop_reason{core::StopReason::None};
         std::optional<core::Temperature> chamber_temperature;
         std::optional<core::Temperature> chamber_target;

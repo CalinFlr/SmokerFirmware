@@ -5,6 +5,9 @@
 #include "smoker/app/snapshot_exchange.hpp"
 #include "smoker/platform/local_connectivity.hpp"
 #include "smoker/platform/firmware_update_service.hpp"
+#include "smoker/platform/flash_operation_coordinator.hpp"
+#include "smoker/platform/history_service.hpp"
+#include "smoker/platform/history_support.hpp"
 #include "smoker/platform/simulated_adapters.hpp"
 
 #include "esp_check.h"
@@ -55,13 +58,16 @@ public:
               events,
               configuration.safety_limits,
               probes,
-          }
+        }
+        , history_mailbox{probes.size(), (probes.size() * 2U) + 1U}
         , snapshots{probes.size(), (probes.size() * 2U) + 1U}
-        , firmware_updates{snapshots}
+        , firmware_updates{snapshots, flash_operations}
+        , history{history_mailbox, flash_operations}
         , connectivity{
               mailbox,
               snapshots,
               firmware_updates,
+              history,
               std::move(configuration.startup_recipe),
           }
     {
@@ -77,8 +83,11 @@ public:
     SimulatedEventSink events;
     app::SmokerApplication application;
     app::SpscCommandMailbox mailbox;
+    FlashOperationCoordinator flash_operations;
+    HistoryObservationMailbox history_mailbox;
     app::SnapshotExchange snapshots;
     FirmwareUpdateService firmware_updates;
+    HistoryService history;
     LocalConnectivityService connectivity;
 };
 
@@ -196,6 +205,7 @@ void control_task(void* const parameter)
         context->application.tick();
         const auto snapshot = context->application.snapshot_view();
         static_cast<void>(context->snapshots.publish(snapshot));
+        context->history_mailbox.observe(snapshot);
         ++completed_cycles;
         if (completed_cycles == 1U || completed_cycles % runtime_log_period_cycles == 0U) {
             const auto minimum_free_stack = uxTaskGetStackHighWaterMark2(nullptr);
@@ -295,6 +305,9 @@ bool start_simulation_runtime(SimulationRuntimeConfiguration configuration) noex
 
     if (!task_context->firmware_updates.start()) {
         ESP_LOGE(tag, "OTA service unavailable; autonomous ControlTask continues");
+    }
+    if (!task_context->history.start()) {
+        ESP_LOGE(tag, "History service unavailable; autonomous ControlTask continues");
     }
     if (!task_context->connectivity.start()) {
         ESP_LOGE(tag, "Local connectivity unavailable; autonomous ControlTask continues");

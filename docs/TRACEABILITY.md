@@ -1,7 +1,9 @@
-# M0-M13 Requirements Traceability
+# M0-M15 Requirements Traceability
 
-Status: **M13 software and defined OTA/rollback target validation complete;
-M12 radio edge cases and external-hardware safety remain pending**
+Status: **M14 software/history implementation and connected-target persistence
+validated; the deliberate Wi-Fi-loss scenario, M12 radio edge cases, and
+external-hardware safety remain pending; M15 Blynk remote access is specified
+but not implemented**
 
 This matrix separates implementation status from validation strength. A rule is
 not considered target- or hardware-validated merely because host tests or an
@@ -23,7 +25,7 @@ ESP-IDF cross-build pass.
 
 Test names below refer to functions in `tests/host/smoker_core_tests.cpp`,
 `tests/host/smoker_v0_tests.cpp`, `tests/host/smoker_m12_tests.cpp`, and
-`tests/host/smoker_m13_tests.cpp`. All host test groups are registered in
+`tests/host/smoker_m13_tests.cpp`, and `tests/host/smoker_m14_tests.cpp`. All host test groups are registered in
 `tests/CMakeLists.txt`.
 
 ## Business rules
@@ -33,7 +35,7 @@ Test names below refer to functions in `tests/host/smoker_core_tests.cpp`,
 | BR-001 | M3 implemented | `SmokerApplication::process(StartSessionCommand)` rejects Start while running | `test_m3_session_and_snapshot` | H-pass, B-pass |
 | BR-002 | M1/M5 implemented | separate chamber state and `ProbeRuntime`/`ProbeSnapshot` types | `test_m5_complete_slice` | H-pass, B-pass |
 | BR-003 | M2 implemented | single `IChamberSensor` input used by control and safety | `test_m2`, `test_m4_invalid_and_latched_fault` | H-pass, B-pass |
-| BR-004 | M5 implemented | probe configuration is a vector; non-empty/unique IDs are validated | `test_m5_complete_slice`, `test_m5_validation_queue_and_combined_order` | H-pass, B-pass |
+| BR-004 | M5 implemented/M9 dependency selected | probe configuration is a vector; non-empty/unique IDs are validated; exact-pinned dual-ADS1115 driver is available for the future platform adapter, while physical channel capacity remains M6B/M9 evidence | `test_m5_complete_slice`, `test_m5_validation_queue_and_combined_order`; ESP-IDF component cross-build | H-pass, B-pass component; real capacity HW-pending M6B/M9 |
 | BR-005 | M5 implemented | `calculate_heater_demand()` accepts only chamber current/target; probe logic emits alarms only | `test_m5_complete_slice` | H-pass, B-pass |
 | BR-006 | M5 implemented | `ProbeSnapshot` exposes all required properties | `test_m5_complete_slice` | H-pass, B-pass |
 | BR-007 | M5 implemented/clarified | `evaluate_probe_state()` gates target alarms on RUNNING, enabled, alarm-enabled, and one latch per target/session | `test_m5_complete_slice`, `test_m5_same_cycle_command_semantics`, `test_m5_alarm_lifecycle_and_probe_defaults` | H-pass, B-pass |
@@ -42,6 +44,30 @@ Test names below refer to functions in `tests/host/smoker_core_tests.cpp`,
 | BR-010 | M3 implemented/clarified | `StageTimer` and `update_stage_timer()` support the three starts, wait for an enabled valid selected-probe sample, and execute one-way | `test_m3_timer_conditions`, `test_m3_probe_timer_availability` | H-pass, B-pass |
 | BR-011 | M10 | no store/recovery implementation in M0-M5 | roadmap and absence review | Deferred M10 |
 | BR-012 | M3 guardrail | recipe values drive control; no food-safety engine exists | source/dependency review | Guardrail, B-pass |
+
+## History rules
+
+| Rule | Milestone/status | Implementation evidence | Test/evidence | Validation |
+|---|---|---|---|---|
+| HR-001 | M14 implemented | `HistoryObservationMailbox` emits only START/RUNNING observations and terminal END; idle snapshots are not appended | `test_sampling_and_mailbox_saturation`; KFB003 retained-session readback | H-pass, B-pass, T-pass |
+| HR-002 | M14 implemented | START/END and semantic changes publish on the first observed cycle; complete periodic records use a 60-second RUNNING-only interval; API stride never suppresses lifecycle/change records | `test_sampling_and_mailbox_saturation`, `test_pagination_and_stride`; KFB003 one-minute sessions and target/alarm transition | H-pass, B-pass, T-pass |
+| HR-003 | M14 implemented/guarded | preallocated SPSC publication drops rather than waits; HistoryTask failure/flash coordination remains platform-only and has no command/heater path | `test_sampling_and_mailbox_saturation`, `test_control_output_is_independent_of_history_saturation`, `test_flash_operation_serialization`; architecture guardrail | H-pass, B-pass, Guardrail; Wi-Fi-loss T-pending |
+| HR-004 | M14 implemented | exact 4 MiB log initializes random/empty media lazily, commits a whole-session eviction tombstone before multi-page erase, evicts completed sessions first, and marks a partition-filling retained session truncated | `test_empty_random_and_reboot`, `test_torn_and_corrupt_records`, `test_rollover_eviction_truncation_and_interruption` including reset after partial victim erase; partition and retained-session readback | H-pass, B-pass, Guardrail; T-pass partition/reconstruction |
+| HR-005 | M14 implemented | records always carry monotonic `session_elapsed`; Unix UTC is optional and can first appear after START | `test_empty_random_and_reboot`; KFB003 samples after SNTP sync | H-pass, B-pass, T-pass |
+| HR-006 | M14 implemented | reboot reconstruction marks a retained session without committed END interrupted and does not enter application recovery | `test_rollover_eviction_truncation_and_interruption` | H-pass, B-pass; T-pending |
+| HR-007 | M14 implemented | only two read-only operational routes exist; strict bounded query parsers reject duplicate/unknown/malformed fields; commissioning rejection is retained | `test_strict_history_queries`; HTTP/browser fixtures; authenticated KFB003 200/400/404 responses | H-pass, B-pass, Guardrail; T-pass operational API |
+| HR-008 | M14 implemented | durable uint64 history ID is reconstructed independently from application session ID and emitted as a JSON decimal string | `test_empty_random_and_reboot`; KFB003 history IDs 1--3 retained across reset | H-pass, B-pass, T-pass |
+
+## Remote-access rules
+
+| Rule | Milestone/status | Implementation evidence | Test/evidence | Validation |
+|---|---|---|---|---|
+| RA-001 | M15 specified | Blynk is confined to an auxiliary personal-client transport and cannot become a local control/timer/safety input | M15 plan, D054, architecture and safety review | Deferred M15 |
+| RA-002 | M15 specified | allowlisted Blynk controls are required to cross the existing bounded command/permission paths and await semantic results | M15 plan and command-boundary review | Deferred M15 |
+| RA-003 | M15 specified | one connect snapshot plus normalized change detection, five-second minimum interval, newest-value coalescing, and no unchanged heartbeat are the required publication contract | planned M15 projection/throttle host tests and target message observation | Deferred M15 |
+| RA-004 | M15 specified | bounded command results and configured critical events are separate from the throttled complete status projection | planned M15 result/event host tests and phone notification scenario | Deferred M15 |
+| RA-005 | M15 specified | Start and OTA-install controls are live gestures and may not be restored/synchronized on MQTT reconnect | planned reconnect/no-replay host and KFB003 tests | Deferred M15 |
+| RA-006 | M15 specified | Blynk supplies only check/install intent; fixed-source signed M13 GitHub OTA remains the download, permission, verification, and rollback path | D050/D054 review and planned Blynk-triggered M13 target scenario | Deferred M15 |
 
 ## Session rules
 
@@ -83,14 +109,14 @@ Test names below refer to functions in `tests/host/smoker_core_tests.cpp`,
 | CR-003 | M1/M2 implemented | `HeaterDemand` enforces finite 0..100 percent; platform output owns electrical conversion | `test_heater_demand`, `test_m2` | H-pass, B-pass |
 | CR-004 | M4 implemented | recipe/live chamber targets cannot exceed configured simulation maximum | `test_m4_over_temperature_and_limits` | H-pass, B-pass |
 | CR-005 | M3/M4 implemented/P0 hardened | `apply_safety_gate()` allows demand only for Running without active fault | `test_m3_session_and_snapshot`, `test_p0_cr_005_heating_state_invariants` | H-pass, B-pass |
-| CR-006 | M2 implementation choice | simple deterministic 100/0 controller documented; no PID claim | `test_m2` | H-pass, B-pass |
+| CR-006 | M2 current/M8 specified | M2 retains the simple deterministic 100/0 controller; D055/M8 select a future exact-pinned `espressif/pid_ctrl` platform adapter whose normalized request remains before the safety gate | `test_m2`; planned M8 adapter, timing/allocation, reset/OFF, ESP32-S3, and real-plant tuning tests | M2 H-pass/B-pass; Deferred M8, HW-pending tuning |
 
 ## Safety rules
 
 | Rule | Milestone/status | Implementation evidence | Test/evidence | Validation |
 |---|---|---|---|---|
 | SF-001 | M4 implemented/P0 guarded | safety evaluated synchronously before sole final heater write | `test_m4_invalid_and_latched_fault`, `test_p0_cr_005_heating_state_invariants`; `tools/check_architecture.py` write-path check | H-pass, B-pass; T-pending |
-| SF-002 | M4 implemented for simulated source | absent authoritative reading raises ChamberSensorInvalid; no last-known fallback | `test_m4_invalid_and_latched_fault` | H-pass, B-pass; real policy Deferred M7 |
+| SF-002 | M4 implemented for simulated source/M7 dependency selected | absent authoritative reading raises ChamberSensorInvalid with no last-known fallback; exact-pinned `esp-idf-lib/max31865` 1.0.8 is available to the future platform adapter but production still uses simulation | `test_m4_invalid_and_latched_fault`; ESP-IDF component cross-build | H-pass, B-pass component; real fault/read policy Deferred M7 and HW-pending |
 | SF-003 | M4 implemented for configured simulation limit | safety evaluation faults above maximum; target validation rejects above it | `test_m4_over_temperature_and_limits` | H-pass, B-pass; physical value HW-pending |
 | SF-004 | M0/M4 partial | constructor writes OFF; config/sensor/safety validated before final demand | `test_m2`, M4 tests, config-invalid M5 test | H-pass, B-pass; reset reason/recovery Deferred M10 |
 | SF-005 | M5 configured/M6A target-validated | platform runtime subscribes/resets TWDT; defaults set 5 s and panic/reset | target diagnostic deliberately stalled `ControlTask` for 7 s; TWDT identified the task, panicked/reset, and next boot reported watchdog reset reason; normal image restored | B-pass, T-pass |
@@ -153,6 +179,20 @@ download, two-slot boot, mark-valid, forced rollback, and final reinstall.
 | firmware image retains growth margin | custom dual-OTA table has 3 MiB slots and a 75% automated ceiling; target verification checks the effective generated M13 configuration so a stale build cannot pass under an old layout | `check_effective_sdkconfig.py`, `check_firmware_size.py`, fresh target build | B-pass, Guardrail |
 | local credential failure paths remain coherent | mapped IPv4 peers retain per-client throttling; allocation-free bounded error envelopes cover cJSON OOM; Wi-Fi/auth companion fields update through separate versioned single-entry NVS blobs; legacy auth migration rejects read/corruption and claimed-without-password states instead of installing the public initial password | legacy-migration policy cases in `test_http_security_policy`, D048/D049 source guardrails, preserved-NVS target boot and read-only key audit | H-pass, B-pass, T-pass preserved state; forced NVS-failure injection pending |
 
+## M14 history/runtime contracts
+
+| Contract | Implementation evidence | Test/evidence | Validation |
+|---|---|---|---|
+| history cannot enter the critical dependency chain | only post-tick `SmokerSnapshotView` crosses a preallocated SPSC mailbox; ControlTask contains no history flash, query, mutex, wall-clock, or logging call | `test_sampling_and_mailbox_saturation`, `test_control_output_is_independent_of_history_saturation`; `tools/check_architecture.py` | H-pass, B-pass, Guardrail |
+| critical history publication avoids allocation and 64-bit atomic helpers | probe/alarm vectors are reserved before task start; mailbox sequences/drop counter are uint32 atomics and publication drops on saturation | `test_sampling_and_mailbox_saturation`; target archive atomic-helper audit | H-pass, B-pass; T-pending |
+| raw log survives incomplete writes and eviction | page/record CRC and commit-last markers retain committed prefixes; a failed runtime program abandons the tail; a committed eviction tombstone hides the whole victim until cleanup finishes | `test_torn_and_corrupt_records`; injected mid-eviction erase failure and reboot in `test_rollover_eviction_truncation_and_interruption` | H-pass, B-pass; T-pending power interruption |
+| history lifecycle remains complete under same-cycle termination and transient writes | a first-observed STOPPED/FAULT session atomically publishes START+END; HistoryTask retains failed START/END ahead of later observations until durable | direct-terminal/saturation cases in `test_sampling_and_mailbox_saturation`; START/END retry cases in `test_torn_and_corrupt_records`; source guardrail | H-pass, B-pass, Guardrail |
+| queries retain bounded result growth | samples scan one 4 KiB page at a time, retain at most requested records, paginate at 60, and apply stride only to periodic SAMPLE records | `test_strict_history_queries`; HTTP fixture pagination | H-pass, B-pass, Browser-pass |
+| history and OTA do not overlap flash ownership | shared platform coordinator gives OTA deferral/ownership and keeps acquisition within install deadline; no coordinator call exists in ControlTask | `test_flash_operation_serialization`; source guardrail | H-pass, B-pass, Guardrail; T-pending |
+| HistoryTask is non-critical and static | one static 12 KiB internal-DRAM task/TCB is pinned to core 0 at low priority and is not subscribed to TWDT | source/build guardrail; KFB003 serial affinity/watermark/write instrumentation | B-pass, Guardrail, T-pass |
+| history UI/API remain local and read-only | two authenticated operational GET routes, commissioning rejection, strict queries, no external assets, full pagination through terminal END, and a 1,200-point browser budget that drops SAMPLE first | HTTP fixture and Playwright dense-change/terminal-END plus responsive/pagination checks; KFB003 authenticated history reads | H-pass, B-pass, Browser-pass; T-pass operational API |
+| partition migration is explicit | preserved 24 KiB NVS plus dual 3 MiB OTA and exact 4 MiB history partition; ordinary unsigned/partial flash remains blocked | `tools/check_partitions.py`, signed-helper preflight, ESP-IDF build; signed KFB003 readback/NVS comparison | B-pass, Guardrail, T-pass |
+
 ## M0 sign-off/reproducibility contracts
 
 | Contract | Evidence | Validation |
@@ -178,4 +218,8 @@ The following cannot be closed by M0-M5:
 - optional additional M13 resilience evidence may exercise a deliberately
   tampered live asset, live operation timeout, and Wi-Fi loss during install;
   the defined signed-release, both-slot, mark-valid, rollback, and reinstall
-  completion path has passed on KFB003.
+  completion path has passed on KFB003;
+- M14 signed full-serial migration, preserved NVS, durable START/sample/CHANGE/
+  END across reboot, API counters, and HistoryTask affinity/stack have passed on
+  KFB003 using simulated I/O; deliberate Wi-Fi-loss-during-RUNNING and injected
+  target flash-failure behavior remain pending.

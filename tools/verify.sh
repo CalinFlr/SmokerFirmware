@@ -120,9 +120,9 @@ run_idf_validation() {
             rm -f "$flash_guard_log"
             exit 1
         fi
-        if ! grep -Fq "M13 blocks ESP-IDF's unsigned serial flash targets" \
+        if ! grep -Fq "M14 blocks ESP-IDF's unsigned serial flash targets" \
             "$flash_guard_log"; then
-            echo "unsigned ESP-IDF target did not fail through the M13 guard: $flash_target" >&2
+            echo "unsigned ESP-IDF target did not fail through the M14 guard: $flash_target" >&2
             cat "$flash_guard_log" >&2
             rm -f "$flash_guard_log"
             exit 1
@@ -143,4 +143,4 @@ if [[ "$mode" != "--host-only" ]]; then
     run_idf_validation
 fi
 
-echo "M0-M13 verification: PASS ($mode)"
+echo "M0-M14 verification: PASS ($mode)"

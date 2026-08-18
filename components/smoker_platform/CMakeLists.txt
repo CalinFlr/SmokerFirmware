@@ -1,12 +1,15 @@
 set(smoker_platform_sources
     "src/firmware_update_support.cpp"
+    "src/history_support.cpp"
     "src/local_network_support.cpp"
     "src/simulated_adapters.cpp"
+    "src/wall_clock.cpp"
 )
 
 if(ESP_PLATFORM)
     list(APPEND smoker_platform_sources
         "src/firmware_update_service.cpp"
+        "src/history_service.cpp"
         "src/local_connectivity.cpp"
         "src/simulation_runtime.cpp"
     )
@@ -25,6 +28,8 @@ if(ESP_PLATFORM)
             esp_system
             esp_timer
             esp_wifi
+            esp-idf-lib__ads111x
+            esp-idf-lib__max31865
             espressif__cjson
             espressif__mdns
             freertos

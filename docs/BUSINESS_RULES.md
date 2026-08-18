@@ -252,3 +252,99 @@ session resolves its active session alarms.
 Faults represent conditions where normal safe control cannot continue.
 
 A fault forces heater OFF.
+
+## History rules
+
+### HR-001 — History exists only for sessions
+
+Durable telemetry is recorded only from the start through the end of a cooking
+session. Idle operation outside a session is not telemetry.
+
+### HR-002 — Bounded sampling plus immediate lifecycle/change records
+
+While a session is `RUNNING`, the controller records one complete control
+snapshot every 60 seconds. Start, end, target/probe configuration, timer,
+alarm, and fault transitions are recorded on the first observed control cycle
+rather than waiting for the next periodic sample.
+
+### HR-003 — History is auxiliary
+
+History corruption, queue overflow, write failure, flash maintenance, OTA
+activity, missing UTC, and network loss must never alter session state, timer
+behavior, safety evaluation, or heater output. Repeated storage failure changes
+history health to `FAILED`; it does not raise an application fault.
+
+### HR-004 — Local circular retention
+
+History uses a bounded 4 MiB internal-flash circular log. Completed sessions
+are evicted oldest first. No fixed retention duration is promised; APIs report
+actual capacity and usage. If one session fills the partition, its newest pages
+remain available and the session is marked truncated.
+
+### HR-005 — Monotonic elapsed time is authoritative
+
+Every record includes monotonic session elapsed time. Synchronized Unix UTC is
+optional display/audit context and may first appear during a session; clock
+synchronization or correction never changes elapsed duration or timers.
+
+### HR-006 — Reboot interruption is visible, not recovery
+
+A durable session without an end record after reboot is exposed as
+interrupted. History does not resume heating or implement M10 session recovery.
+
+### HR-007 — History access is authenticated and read-only
+
+History APIs and the chart are available only on the authenticated operational
+STA surface. Commissioning SoftAP cannot read history. M14 provides no erase,
+delete, CSV, upload, or safety-bypass operation.
+
+### HR-008 — Durable history identity is independent
+
+Each stored session receives a monotonically ordered 64-bit history identifier
+that survives reboot while retained. It is independent of application session
+IDs, which may restart after reboot, and is represented as a decimal string in
+JSON.
+
+## Remote-access rules
+
+### RA-001 — Blynk is an auxiliary personal client
+
+M15 serves one owner and one home smoker through Blynk. Blynk availability,
+connectivity, notification delivery, retention, or quota never participates in
+local control, timers, safety evaluation, or heater output.
+
+### RA-002 — Remote commands preserve local semantics
+
+Remote Start, Stop, setting, acknowledgement, resolved-fault clear, and OTA
+requests enter through the same bounded application command and permission
+paths as their local equivalents. MQTT delivery is not semantic success, and
+no remote action may command heater output directly or bypass validation and
+safety.
+
+### RA-003 — Remote status is change-driven and throttled
+
+The device publishes one current remote-status projection after Blynk
+connect/reconnect. It then publishes only after a normalized user-visible value
+changes, at most once in any five-second interval. Changes inside the interval
+are coalesced into the newest complete projection. An unchanged projection is
+never retransmitted merely because time passed.
+
+### RA-004 — Critical remote feedback is immediate and separate
+
+Correlated command results and configured critical events such as faults,
+alarms, session completion, and OTA result may be published immediately. They
+do not force an unchanged status snapshot and are not used as control or safety
+inputs.
+
+### RA-005 — Reconnect never replays an energizing command
+
+A Blynk reconnect must not replay, restore, or synchronize a retained Start or
+OTA-install control value. Start and install each require a new live user
+request and remain subject to their existing application interlocks.
+
+### RA-006 — Remote OTA reuses the fixed signed M13 path
+
+Blynk may request an update check or installation, but it does not supply an
+arbitrary URL or image. The ESP32 retrieves the latest fixed public GitHub
+Release asset and applies all M13 version, target, signature, running-session,
+rollback, and validation rules.

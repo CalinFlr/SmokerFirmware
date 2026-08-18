@@ -2,3 +2,5 @@ dependencies:
   idf: "==6.0.2"
   espressif/cjson: "==1.7.19"
   espressif/mdns: "==1.8.2"
+  esp-idf-lib/max31865: "==1.0.8"
+  esp-idf-lib/ads111x: "==1.1.14"

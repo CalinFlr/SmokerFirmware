@@ -104,16 +104,51 @@ if ! "$playwright_cli" --session "$session" run-code "async (page) => {
     }
     browserErrors.length = 0;
     if (!await page.locator('#firmware-panel').count()) throw new Error('firmware panel missing');
+    if (!await page.locator('#history-panel').count()) throw new Error('history panel missing');
+    await page.waitForFunction(() => document.querySelectorAll('#history-session option').length === 2);
+    if (await page.locator('#history-session option').count() !== 2) {
+        throw new Error('current and past history sessions are not selectable');
+    }
+    await page.waitForFunction(() => historyObservations.length > 60);
+    if (!await page.locator('#history-warning').filter({hasText: 'degradată'}).count()) {
+        throw new Error('degraded history warning missing');
+    }
+    await page.evaluate(async () => {
+        const response = await fetch('/fixture/history/complete');
+        if (!response.ok) throw new Error('history completion fixture failed');
+        await refreshHistory();
+    });
+    await page.waitForFunction(() => historyObservations.at(-1)?.kind === 'END');
+    if (await page.evaluate(() => historyObservations.length <= 650
+            || historyObservations.length > historyPointBudget)) {
+        throw new Error('dense lifecycle history did not reach END within the bounded chart');
+    }
+    if (!await page.locator('#history-session option:checked').textContent()
+            .then(text => text.includes('încheiată'))) {
+        throw new Error('active history did not refresh its terminal END');
+    }
     await page.setViewportSize({width: 390, height: 844});
     const viewportOverflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth);
     if (viewportOverflow) throw new Error('firmware dashboard overflows iPhone-width viewport');
     if (await page.locator('#firmware-check').evaluate(button => button.getBoundingClientRect().height) < 44) {
         throw new Error('firmware check touch target is smaller than 44px');
     }
+    const chartWidth = await page.locator('#history-chart').evaluate(canvas => canvas.getBoundingClientRect().width);
+    if (chartWidth > 360 || chartWidth < 280) throw new Error('history chart is not responsive at 390px');
+    await page.locator('#history-session').selectOption('101');
+    await page.locator('#history-warning').filter({hasText: 'întreruptă'}).waitFor();
+    if (!await page.locator('#history-warning').getByText(/Începutul sesiunii/).count()) {
+        throw new Error('truncated history warning missing');
+    }
+    if (!await page.locator('#history-session option:checked').textContent().then(text => text.includes('3 min'))) {
+        throw new Error('missing-UTC session did not use a relative label');
+    }
+    await page.locator('#history-session').selectOption('102');
+    await page.waitForFunction(() => historyObservations.length > 60);
     await page.setViewportSize({width: 1280, height: 900});
-    await page.locator('#firmware-current').filter({hasText: '0.13.0'}).waitFor();
+    await page.locator('#firmware-current').filter({hasText: '0.14.0'}).waitFor();
     await page.locator('#firmware-check').click();
-    await page.locator('#firmware-available').filter({hasText: '0.13.1'}).waitFor();
+    await page.locator('#firmware-available').filter({hasText: '0.14.1'}).waitFor();
     await page.locator('#firmware-install').click();
     await page.waitForFunction(() => document.querySelector('#firmware-progress').style.width === '42%');
     if (!await page.locator('#start').isDisabled()) {
@@ -168,4 +203,4 @@ if ! "$playwright_cli" --session "$session" run-code "async (page) => {
     exit 1
 fi
 
-echo "M12/M13 AP, STA session, and firmware browser contract: PASS"
+echo "M12-M14 AP, STA session, firmware, and history browser contract: PASS"

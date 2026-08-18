@@ -13,9 +13,12 @@ A future item is **not permission to implement it early**.
   `KFB003` N16R8 controller, integrated carrier capabilities/restrictions,
   storage readback, native USB flashing, sustained runtime, stack watermark,
   and TWDT panic/reset are recorded.
-- **M6B — external-hardware identification:** not started and blocked until the
-  exact sensor, probe, SSR, power, and independent-protection hardware is
-  available.
+- **M6B — external-hardware identification:** started for chamber and probe
+  acquisition. MAX31865 plus a three-wire PT100 and two ADS1115 converters are
+  selected, with exact registry drivers imported. Physical modules/revisions,
+  remaining PT100 and probe-frontend facts, address straps, connectors, GPIOs,
+  and connected validation remain open. SSR, power, and independent-protection
+  hardware are still blocked on exact parts.
 - **M6B and M7-M10 — remaining controller product baseline:** future. Product V0
   cannot be called complete before real sensing/output, food probes,
   persistence, and recovery are implemented and validated at their appropriate
@@ -28,8 +31,12 @@ A future item is **not permission to implement it early**.
   migration, public GitHub OTA into the second slot, forced pending-image
   rollback, clean reinstall, five-cycle validation, and persistent reboot
   passed on KFB003.
-- **M14-M15 — history/cloud capabilities:** future independent milestones;
-  they are not implied by M12/M13 implementation.
+- **M14 — durable local history:** implemented for simulated I/O with host,
+  browser, guardrail, cross-build, signed connected-board migration, reboot,
+  and stack/runtime validation; deliberate Wi-Fi loss remains pending.
+- **M15 — personal Blynk remote access:** specified, not implemented. One owner
+  controls one home smoker through Blynk's existing app and MQTT/TLS service;
+  there is no custom backend, mobile app, domain, or cloud-history sync.
 
 Rule-level implementation and validation evidence is in
 `docs/TRACEABILITY.md`.
@@ -179,7 +186,9 @@ Definition of done:
 
 ## M6B — Identify external sensing, output, and safety hardware
 
-Status: **Not started — blocked on exact external hardware availability.**
+Status: **In progress — MAX31865/three-wire PT100 and two ADS1115 converters
+selected; physical modules, complete electrical frontends, and the remaining
+external hardware are still incomplete.**
 
 Do not implement a real external adapter until its actual component/interface
 is available and documented.
@@ -201,27 +210,93 @@ checklist is resolved.
 
 ## M7 — Real authoritative chamber sensor
 
+Status: **Preparation started — exact MAX31865 driver imported; adapter, wiring,
+and connected-sensor validation are blocked on the remaining M6B chamber
+facts.**
+
 Replace simulated chamber source with real hardware adapter.
 
 Keep simulated adapter for development/testing.
 
+Use the exact-pinned ESP Component Registry dependency
+`esp-idf-lib/max31865` 1.0.8 rather than rewriting the register protocol. Its
+70 ms `max31865_measure()` convenience call must not be used directly inside
+the critical cycle. After the physical module is documented, choose either
+continuous conversion with bounded reads or an explicit non-blocking
+single-shot sequence, and validate the choice on hardware.
+
+The confirmed RTD configuration is PT100 with three leads, corresponding to
+driver nominal resistance `100.0F` and `MAX31865_3WIRE`. The fitted module
+reference resistor remains an independent required value and must not be
+inferred from the RTD type.
+
+The project adapter maps every SPI, conversion, non-finite, and MAX31865 fault
+to an absent authoritative measurement; existing safety then latches
+`ChamberSensorInvalid` and commands heater OFF. No last-known-value fallback is
+allowed.
+
 Requires the chamber-sensor/frontend portion of M6B.
 
-## M8 — Real SSR heater output
+## M8 — Real SSR heater output + PID control
 
 Implement real platform heater driver.
+
+Replace the M2 simulation's deterministic 100/0 control choice with an adapter
+over Espressif's official `espressif/pid_ctrl` component. Add that Component
+Registry dependency only when M8 implementation begins, pin its exact reviewed
+version and lockfile hash, and keep it outside `smoker_core`.
+
+The PID adapter runs synchronously inside the existing `ControlTask`; it must
+not create a PID task, perform I/O, block, or allocate during computation. It
+returns normalized `0..100%` heater demand, after which the existing synchronous
+safety gate remains authoritative. SSR switching/window timing remains a
+separate platform heater-output concern.
+
+Select and validate the numeric backend, PID form, sample period, gains,
+integral/output bounds, reset behavior, and SSR window using the identified
+sensor, heater, smoker, and protection hardware. Do not invent tuning values
+from the M2 simulation.
 
 Do not bypass the approved safety gate.
 
 Electrical work must respect independent hardware safety design.
 
-Requires the SSR/heater and independent-protection portions of M6B.
+Requires M7 plus the SSR/heater and independent-protection portions of M6B.
+
+Definition of done:
+
+- the pinned official component passes host-boundary and ESP32-S3 integration
+  tests through the project adapter;
+- boot, missing target, Stop, invalid measurement, and fault reset/disable PID
+  state and command heater OFF according to the existing rules;
+- deterministic sample timing and allocation-free `compute` behavior are
+  verified;
+- tuning and closed-loop behavior are validated on the real thermal plant;
+- safety-gated OFF and independent hardware protection are validated
+  separately from PID performance.
 
 ## M9 — Real food probes
+
+Status: **Preparation started — exact ADS1115 driver imported for two selected
+converters; modules, addresses, channel map, probe frontend, wiring, and
+connected validation remain blocked on M6B.**
 
 Integrate actual probe frontend/protocol.
 
 Food probes remain monitoring/alarm inputs only.
+
+Use the exact-pinned ESP Component Registry dependency
+`esp-idf-lib/ads111x` 1.1.14 rather than rewriting its I2C register protocol.
+The upstream example demonstrates two devices on one bus, but its GND/VCC ADDR
+straps are example wiring only. The project must document two distinct physical
+addresses from `0x48..0x4b` before activation.
+
+Keep the future adapter in `smoker_platform` behind `IFoodProbeSource`, without
+a separate sensor task. Use the driver's explicit start/readiness/value API to
+select a bounded conversion schedule only after gain, rate, channel mapping,
+analog conditioning, and calibration are known. An ADC/read/validity failure
+is an absent monitoring-probe reading and must not change chamber control or
+heater demand.
 
 Confirm the device-specific maximum configured probe count from the actual
 frontend/hardware. Do not turn that capacity into a universal `smoker_core`
@@ -448,13 +523,123 @@ thermal, Secure Boot, flash-encryption, or independent electrical-safety claim.
 
 ## M14 — Telemetry/history
 
-Add history only after storage strategy is deliberately chosen.
+Status: **Implemented for simulated I/O — host/browser/build and connected-target
+persistence validated; deliberate Wi-Fi-loss-during-RUNNING remains pending.**
 
-Avoid high-frequency flash writes.
+M14 deliberately chooses a local 4 MiB raw-flash circular log rather than NVS,
+a filesystem, or cloud storage. It records only active sessions: immediate
+START, END, and semantic changes, plus periodic complete snapshots every 60
+seconds while RUNNING. CRC-checked commit-last pages/records reconstruct
+after reboot, evict completed sessions oldest first, and expose degraded,
+interrupted, and truncated state rather than hiding data loss.
 
-## M15 — Optional cloud/mobile integration
+One static low-priority core-0 `HistoryTask` owns storage. `ControlTask` only
+publishes through a preallocated SPSC mailbox after its normal safety-gated
+cycle; overflow drops and remains observable. History and OTA serialize flash
+work with OTA priority and no control dependency. Monotonic session elapsed is
+authoritative; synchronized UTC is optional.
 
-Cloud/mobile are auxiliary clients, not control dependencies.
+Authenticated operational-STA GET APIs provide bounded newest-first summaries
+and paged/strided samples. The embedded Romanian dashboard renders a responsive
+bounded chart. Commissioning exposes no history and M14 adds no delete, export,
+upload, cloud, recovery, or control command.
+
+Definition of done:
+
+- history format/reboot/torn-write/eviction behavior passes native and sanitizer
+  tests;
+- architecture guardrails prove bounded non-blocking publication and storage/
+  OTA isolation;
+- HTTP and real-browser AP/STA contracts pass;
+- ESP-IDF 6.0.2 build, exact partition check, strict C++20 audit, and size gate
+  pass;
+- a signed full-serial installation on KFB003 confirms the new table, preserved
+  NVS, START/sample/END persistence across reboot, HistoryTask core/stack, and
+  local control continuity during history unavailability/Wi-Fi loss.
+
+The connected-target gate validates internal flash and simulated data only. It
+does not validate a sensor, SSR, thermal behavior, or independent electrical
+safety.
+
+## M15 — Personal Blynk remote access
+
+Status: **Specified — implementation and validation have not started.**
+
+M15 provides private remote operation for one owner and one home smoker by
+using the existing Blynk mobile application and Blynk Cloud's standard Device
+MQTT API over TLS. It does not build a product-scale, multi-user cloud service.
+
+The ESP32 connects outbound to the Blynk-provided regional endpoint. No inbound
+home-network port, custom domain, custom backend, custom mobile application, or
+cloud database is required. The Blynk device token is a non-versioned secret;
+it must not appear in source, logs, snapshots, browser assets, release
+artifacts, or documentation evidence.
+
+M15 scope:
+
+- use the official ESP-MQTT component and Blynk Device MQTT API over TLS;
+- map Blynk controls to the existing external command set: Start, Stop,
+  chamber/probe settings, alarm acknowledgement, resolved-fault clear, and a
+  user-requested firmware check/install;
+- return correlated semantic command acceptance/rejection instead of treating
+  MQTT delivery as application success;
+- publish one bounded `batch_ds` remote-status projection from immutable
+  application/platform snapshots;
+- configure Blynk events for faults, alarms, session completion, and OTA result;
+- let the Blynk application provide the single user's dashboard, graphs, and
+  notifications;
+- reuse M13's fixed public GitHub
+  `releases/latest/download/smoker_controller.bin` source, signed-image
+  verification, permission interlock, rollback, and result reporting. Blynk
+  carries only the check/install request and status; it never carries an
+  arbitrary URL or firmware binary.
+
+Remote-status publication is change-driven, not periodic:
+
+- publish the current projection once after MQTT connect/reconnect;
+- after that, publish only when at least one normalized, user-visible projected
+  value changes;
+- never publish status more often than once per five seconds;
+- coalesce changes inside that window and publish only the newest complete
+  projection when the window opens;
+- if nothing changes for 30 seconds, 30 minutes, or longer, publish no duplicate
+  status;
+- use MQTT keepalive/Blynk connection state for online/offline rather than a
+  telemetry heartbeat;
+- command results and critical Blynk events are separate, rare messages and may
+  be emitted immediately; they do not force an unchanged status publication.
+
+Remote commands cross the existing bounded transport and are submitted only by
+`ControlTask`. MQTT callbacks never call `SmokerApplication::submit()`, mutate
+runtime state, write heater output, or wait on the critical loop. A reconnect
+must not replay or synchronize a retained Start/OTA control value; a new user
+gesture is required. Every command retains the same validation, safety gate,
+and application semantics as its local equivalent.
+
+M15 does not upload or backfill M14 raw history. Blynk datastream retention is
+an auxiliary visualization cache, not the authoritative durable session log.
+Loss of Blynk, Internet, MQTT, credentials, notifications, or quota cannot
+change local session, timer, safety, or heater behavior.
+
+Definition of done:
+
+- host tests cover normalized-projection equality, first-connect publication,
+  five-second throttling, coalescing, silence without change, and immediate
+  event/command-result separation;
+- host/concurrency tests cover command mapping, correlated results, no retained
+  Start/OTA replay, bounded saturation, and control independence from a stalled
+  or disconnected Blynk transport;
+- architecture guardrails keep Blynk/MQTT out of `smoker_core` and prevent
+  network callbacks from submitting directly or writing heater output;
+- ESP-IDF 6.0.2 strict-C++20 build, dependency, stack, image-size, and task/core
+  checks pass;
+- the connected KFB003 publishes one initial snapshot, stays silent while the
+  projection is unchanged, coalesces changed snapshots to at most one per five
+  seconds, receives Start/Stop with semantic results, emits a phone
+  notification, reconnects after Wi-Fi/Blynk loss without replaying Start, and
+  requests a signed GitHub OTA through the existing M13 path while not running;
+- all connected-target work uses simulated I/O until M6B/M7-M9 hardware exists,
+  and therefore makes no sensor, SSR, thermal, or independent-safety claim.
 
 ## Future / undecided
 
@@ -468,4 +653,4 @@ Do not scaffold until explicitly requested:
 - SSR stuck-ON detection;
 - advanced outage-duration recovery policy;
 - richer recipe automation;
-- cloud synchronization.
+- product-scale accounts, sharing, fleet management, and cloud synchronization.

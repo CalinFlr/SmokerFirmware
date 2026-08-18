@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the generated ESP-IDF configuration required by M13."""
+"""Validate the generated ESP-IDF configuration required by M14."""
 
 from __future__ import annotations
 
@@ -65,14 +65,14 @@ def configuration_failures(path: Path) -> list[str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Check the effective generated ESP-IDF M13 configuration."
+        description="Check the effective generated ESP-IDF M14 configuration."
     )
     parser.add_argument("sdkconfig", type=Path)
     arguments = parser.parse_args()
 
     failures = configuration_failures(arguments.sdkconfig)
     if failures:
-        print("Effective M13 sdkconfig check failed:", file=sys.stderr)
+        print("Effective M14 sdkconfig check failed:", file=sys.stderr)
         for failure in failures:
             print(f"  - {failure}", file=sys.stderr)
         print(
@@ -81,7 +81,7 @@ def main() -> int:
         )
         return 1
 
-    print(f"Effective M13 sdkconfig: PASS ({arguments.sdkconfig})")
+    print(f"Effective M14 sdkconfig: PASS ({arguments.sdkconfig})")
     return 0
 
 

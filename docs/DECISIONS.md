@@ -749,3 +749,215 @@ signed binary and SHA-256. Public visibility must never turn every commit into
 an automatically signed release.
 
 Status: Accepted.
+
+## D053 — M14 uses a bounded raw-flash circular session history
+
+M14 assigns a 4 MiB `data, 0x40` partition at `0x620000` after the two existing
+3 MiB OTA slots. It uses a project-owned versioned circular page/record format rather than
+NVS, a filesystem, or an external/cloud service. NVS remains reserved for small
+configuration values; a filesystem would add mount/recovery and dependency
+surface without a current file requirement; cloud storage would violate local
+availability and M15 scope.
+
+Pages equal the confirmed 4 KiB erase sector. Page and record headers carry
+magic, format version, CRC, generation/identity metadata, and a commit-last
+marker; records do not cross pages. Startup reconstructs committed prefixes,
+reports torn/corrupt tails as degraded, and lazily erases unclaimed media.
+Completed sessions are evicted whole and oldest first, then interrupted
+sessions. A commit-only tombstone in reserved page-header space makes the whole
+victim logically absent before its first sector erase and is erased last;
+startup treats intermediate NOR states of that marker as fail-closed and
+completes the eviction before exposing history. A reset or erase failure
+therefore cannot reconstruct only the surviving pages of an old session. If
+one active session owns the full partition, only its oldest page is
+reused and the retained summary is marked truncated. Capacity and usage are
+reported; no retention duration is promised.
+
+`ControlTask` publishes a complete post-safety snapshot through a preallocated
+16-entry SPSC mailbox with 32-bit atomic sequences. Ordinary samples/changes
+reserve lifecycle admission, drop rather than wait, and expose their drop
+count. START and END are lifecycle records; periodic samples occur every 60
+seconds while RUNNING; semantic changes publish on the first observed control
+cycle. `ControlTask` performs no clock, mutex,
+flash, logging, allocation, or HTTP work for history.
+
+A session that both starts and reaches STOPPED/FAULT within one control cycle
+is represented by an atomically admitted START+END mailbox pair. The auxiliary
+consumer retries failed flash START and END records in FIFO order before
+consuming later observations, so a transient missing START cannot orphan END or
+block all subsequent histories.
+
+One static 12 KiB low-priority `HistoryTask` on core 0, outside TWDT, owns flash
+append/reconstruction and attaches credible Unix UTC when already synchronized.
+Monotonic session elapsed remains authoritative. A platform flash coordinator
+prevents raw-history and OTA writes from overlapping; OTA defers new history
+work and its wait remains inside the existing total installation deadline.
+History failure changes only history health and never submits a command, raises
+an application fault, or changes heater/timer/safety behavior.
+
+Two strict, authenticated, operational-STA-only GET APIs provide newest-first
+session summaries and paged/strided records. History IDs are decimal JSON
+strings. The embedded bounded chart has no external runtime. Commissioning
+rejects all history access, and M14 adds no delete, erase, CSV, upload, or cloud
+operation.
+
+Changing the M13 partition table requires a complete signed serial installation;
+an application-only OTA cannot introduce the partition table. This migration
+preserves the existing NVS range and leaves `0x5e0000` bytes unallocated.
+
+Status: Accepted.
+
+## D054 — M15 uses Blynk as a personal MQTT relay and application
+
+M15 targets one maintainer/owner controlling one home smoker. It uses Blynk's
+existing mobile application and Device MQTT API over TLS rather than building a
+custom mobile app, backend, domain, database, or multi-user product service.
+The firmware will use the official ESP-MQTT component against the
+Blynk-provided regional endpoint. The Blynk account remains the phone-side
+authentication boundary; the per-device token is a non-versioned platform
+secret and is never committed or exposed through firmware diagnostics.
+
+This chooses Blynk over Telegram because the required daily experience is a
+live smoker dashboard with controls, datastreams, graphs, and push events, not
+a chat-only command surface. It chooses Blynk over a generic free MQTT broker
+or Cloudflare relay because those alternatives still require a custom phone UI
+and/or push/backend code. The choice is intentionally replaceable: Blynk exists
+only in `smoker_platform` and consumes the same immutable snapshots and bounded
+command mailbox as other network adapters.
+
+Remote status uses one bounded `batch_ds` projection. It publishes once after
+connect/reconnect and thereafter only when the normalized user-visible
+projection changes. Successful status publications are separated by at least
+five seconds; changes inside that interval coalesce to the newest complete
+projection. There is no periodic duplicate status or telemetry heartbeat.
+MQTT keepalive and Blynk presence provide connectivity indication. Correlated
+command results and configured fault/alarm/session/OTA events are separate,
+rare messages and may publish immediately.
+
+Blynk controls are live gestures, not cloud-owned desired state. MQTT callbacks
+may translate an allowlisted control into the existing bounded transport, but
+only `ControlTask` calls `SmokerApplication::submit()`. The adapter must not
+sync or replay Start or OTA-install datastream values after reconnect, and
+Blynk delivery is never reported as semantic acceptance. No Blynk operation
+can write heater output or bypass safety.
+
+The firmware-update control carries only a check/install request. M13 remains
+the sole OTA implementation and downloads the fixed public GitHub
+`releases/latest/download/smoker_controller.bin` asset directly, verifies the
+ESP32-S3 signed image, obtains application permission, rejects installation
+while `RUNNING`, and retains rollback/first-boot validation. No Blynk firmware
+storage or Blynk.Air packaging is required.
+
+Blynk datastream retention may support auxiliary graphs, but M14 raw history
+remains the authoritative local session log and is not uploaded or backfilled.
+Free-plan quotas are handled by bounded change-driven publication, not by
+weakening local control or safety when quota or service is unavailable.
+
+Status: Accepted.
+
+## D055 — M8 uses Espressif's official PID component behind a platform adapter
+
+M8 will use the official ESP Component Registry component
+`espressif/pid_ctrl`. The currently reviewed release is `0.3.1`, which declares
+ESP-IDF `>=4.4` compatibility and therefore covers the project's pinned
+ESP-IDF `6.0.2` baseline. It is a registry component maintained by Espressif,
+not a component bundled directly in the ESP-IDF `6.0.2` source tree.
+
+The dependency is not added before M8. At implementation time it must be pinned
+to the exact reviewed version and recorded with its registry hash in
+`dependencies.lock`; an unreviewed floating upgrade is forbidden. Backend,
+positional/incremental form, sample period, gains, integral/output limits, and
+SSR window are selected from real M6B/M7/M8 hardware evidence rather than the
+M2 simulation.
+
+Because the component includes ESP-IDF types, it remains in a
+`smoker_platform` PID adapter behind an application-owned port. `smoker_core`
+stays pure platform-independent C++, and `SmokerApplication`/`ControlTask`
+remains the only caller and runtime-state writer. The adapter creates no task;
+its compute call is synchronous, bounded, free of I/O and repeated allocation,
+and returns only normalized `0..100%` demand.
+
+The synchronous safety gate is applied after PID computation and may always
+replace its result with OFF. Boot, Stop, missing target, invalid authoritative
+measurement, and fault paths must leave heating OFF and reset/disable latent
+controller state before a later explicit Start. Electrical SSR windowing stays
+in the heater-output adapter and is not delegated to PID.
+
+Status: Accepted.
+
+## D056 — M7 imports the registry MAX31865 driver before physical activation
+
+The authoritative chamber frontend will use MAX31865. ESP-IDF 6.0.2 provides
+the required SPI master but does not bundle a MAX31865 device driver. The
+project therefore uses ESP Component Registry component
+`esp-idf-lib/max31865` exactly at version 1.0.8, with registry component hash
+`c7a027843a3f9cf4b06e7e216b25b2089115568f288c8682defd84c018a5b80f`.
+The BSD-3 component explicitly targets ESP32-S3, and that release contains the
+upstream ESP-IDF 6 driver-component compatibility change. This is preferred to
+copying register logic into the project or depending directly on an unversioned
+Git repository.
+
+Importing and cross-building the driver is M7 preparation, not a completed M6B
+physical record or a real-sensor implementation claim. The selected sensor is
+a three-wire PT100, fixing `rtd_nominal = 100.0F` and `MAX31865_3WIRE` for the
+future adapter. Production continues to compose `SimulatedChamberSensor` until
+the exact breakout revision, fitted reference resistor, supply/logic behavior,
+connector, SPI host, and GPIO assignment are documented and checked against
+`CTRL-001`.
+
+The future implementation remains a `smoker_platform` adapter behind the
+existing application-owned `IChamberSensor` port. It creates no task and does
+not expose ESP-IDF or driver types to `smoker_app` or `smoker_core`. The
+component's `max31865_measure()` convenience function waits 70 ms and must not
+be called directly from the critical cycle. M7 will select and hardware-test
+either bounded continuous reads or a staged non-blocking single-shot sequence.
+
+Every SPI/conversion error, MAX31865 fault, non-finite value, or value rejected
+by the documented M7 validity policy becomes an absent authoritative
+measurement. The application must not reuse the last valid value: existing
+synchronous safety latches `ChamberSensorInvalid` and commands heater OFF.
+
+Status: Accepted.
+
+## D057 — M9 imports the registry ADS1115 driver before physical activation
+
+The external analog/probe acquisition path will use two ADS1115 converters.
+ESP-IDF 6.0.2 provides the I2C master but does not bundle an ADS1115 device
+driver. The project therefore uses ESP Component Registry component
+`esp-idf-lib/ads111x` exactly at version 1.1.14, with registry component hash
+`fd18497adfb7210d750188986bc7cebc048db36abb64fdbe7216d4536083c4a2` and
+upstream release commit `9eb6f607662518f1bdd3a3b88629db720b765b8e`. The
+BSD-3 component explicitly targets ESP32-S3 and its versioned example
+demonstrates two ADS1115 descriptors on one bus. This is preferred to copying
+register logic into the project or depending directly on an unversioned Git
+repository.
+
+The component's wildcard support dependencies are made reproducible by the
+versioned lockfile: `esp-idf-lib/i2cdev` 2.1.2 at hash
+`ad8981cc64533dcaced5107d72e42bcebe79345e194e82795792af531b300ce3` and
+`esp-idf-lib/esp_idf_lib_helpers` 1.4.0 at hash
+`689853bb8993434f9556af0f2816e808bf77b5d22100144b21f3519993daf237`.
+The selected `i2cdev` release detects ESP-IDF 6.0 and compiles against its new
+`i2c_master` driver.
+
+Importing and cross-building these components is M9 preparation, not a
+completed probe frontend or connected-hardware claim. Two devices on a shared
+bus require two distinct physical ADDR selections from `0x48..0x4b`; the
+upstream example's GND/VCC straps are not project assignments. Production
+continues to compose simulated probe sources until the exact module revisions,
+supplies, address straps, pull-ups, channel purposes, analog conditioning,
+probe curves, calibration, I2C port, and GPIOs are documented at M6B.
+
+The future implementation remains a `smoker_platform` adapter behind the
+existing `IFoodProbeSource` port. It creates no task and does not expose
+ESP-IDF/driver types to `smoker_app` or `smoker_core`. The driver's separate
+start-conversion, busy, and value operations permit a staged bounded schedule;
+the exact mode, gain, data rate, mux sequence, and validity policy depend on
+the physical frontend and connected tests.
+
+An I2C, conversion, calibration, or validity failure becomes an absent reading
+for the affected food probe. Per BR-005 and SF-008, food probes remain
+monitoring/alarm inputs: no ADS1115 value or failure directly changes the
+authoritative chamber control, fault policy, or heater demand.
+
+Status: Accepted.
