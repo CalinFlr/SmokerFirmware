@@ -117,7 +117,10 @@ public:
         if (erase_calls_ == fail_erase_call_) {
             if (partially_erase_on_failure_ && offset + 40U <= bytes_.size()) {
                 for (std::size_t index = offset + 36U; index < offset + 40U; ++index) {
-                    for (std::uint8_t bit = 1U; bit != 0U; bit <<= 1U) {
+                    for (std::uint8_t bit = 1U; bit != 0U;
+                         bit = static_cast<std::uint8_t>(
+                             static_cast<unsigned int>(bit) << 1U
+                         )) {
                         if ((bytes_[index] & bit) == 0U) {
                             bytes_[index] |= bit;
                             return false;
