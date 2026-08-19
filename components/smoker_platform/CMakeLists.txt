@@ -1,13 +1,18 @@
 set(smoker_platform_sources
+    "src/blynk_command_support.cpp"
+    "src/blynk_provisioning_support.cpp"
+    "src/blynk_remote_support.cpp"
     "src/firmware_update_support.cpp"
     "src/history_support.cpp"
     "src/local_network_support.cpp"
+    "src/runtime_transport_support.cpp"
     "src/simulated_adapters.cpp"
     "src/wall_clock.cpp"
 )
 
 if(ESP_PLATFORM)
     list(APPEND smoker_platform_sources
+        "src/blynk_service.cpp"
         "src/firmware_update_service.cpp"
         "src/history_service.cpp"
         "src/local_connectivity.cpp"
@@ -19,6 +24,7 @@ if(ESP_PLATFORM)
         REQUIRES smoker_app
         PRIV_REQUIRES
             esp_event
+            esp_driver_uart
             esp_http_client
             esp_http_server
             esp_netif
@@ -28,6 +34,7 @@ if(ESP_PLATFORM)
             esp_system
             esp_timer
             esp_wifi
+            mqtt
             esp-idf-lib__ads111x
             esp-idf-lib__max31865
             espressif__cjson

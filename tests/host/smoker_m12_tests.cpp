@@ -116,6 +116,7 @@ SmokerSnapshotView snapshot_with_generation(
         current,
         current,
         *smoker::core::HeaterDemand::from_percent(static_cast<float>(generation % 101U)),
+        false,
         {},
         std::span<const ProbeSnapshotView>{&probe, 1U},
         std::span<const smoker::core::Alarm>{&alarm, 1U},

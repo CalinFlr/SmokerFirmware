@@ -1,4 +1,5 @@
 #include "smoker/platform/firmware_update_service.hpp"
+#include "smoker/platform/runtime_transport_support.hpp"
 
 #include "esp_app_desc.h"
 #include "esp_app_format.h"
@@ -39,7 +40,6 @@ using namespace std::chrono_literals;
 constexpr char tag[] = "smoker_ota";
 constexpr std::size_t ota_task_stack_size_bytes = 16U * 1024U;
 constexpr UBaseType_t ota_task_priority = tskIDLE_PRIORITY + 1U;
-constexpr std::uint32_t internal_validation_correlation_id = 0xFFFFFFFEU;
 constexpr std::int64_t validation_timeout_microseconds = 10LL * 1000LL * 1000LL;
 constexpr std::int64_t permission_timeout_microseconds = 10LL * 1000LL * 1000LL;
 constexpr std::int64_t check_timeout_microseconds = 30LL * 1000LL * 1000LL;
@@ -521,7 +521,7 @@ public:
             validation_pending_.store(true, std::memory_order_release);
             validation_started_at_.store(esp_timer_get_time(), std::memory_order_release);
             prepare_correlation_.store(
-                internal_validation_correlation_id, std::memory_order_release
+                internal_ota_correlation_id, std::memory_order_release
             );
         }
     }

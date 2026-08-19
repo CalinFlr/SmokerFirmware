@@ -4,30 +4,29 @@
 #include "smoker/app/snapshot_exchange.hpp"
 #include "smoker/core/domain.hpp"
 #include "smoker/platform/firmware_update_service.hpp"
-#include "smoker/platform/history_service.hpp"
 #include "smoker/platform/runtime_transport_support.hpp"
 
 #include <memory>
 
 namespace smoker::platform {
 
-class LocalConnectivityService final {
+class BlynkService final {
 public:
-    LocalConnectivityService(
-        app::SpscCommandMailbox& command_mailbox,
+    BlynkService(
+        app::SpscCommandMailbox& application_mailbox,
         const app::SnapshotExchange& snapshots,
         FirmwareUpdateService& firmware_updates,
-        HistoryService& history,
         RuntimeIdGenerator& ids,
         core::Recipe startup_recipe
     ) noexcept;
-    ~LocalConnectivityService();
+    ~BlynkService();
 
-    LocalConnectivityService(const LocalConnectivityService&) = delete;
-    LocalConnectivityService& operator=(const LocalConnectivityService&) = delete;
+    BlynkService(const BlynkService&) = delete;
+    BlynkService& operator=(const BlynkService&) = delete;
 
+    // Starts even without a credential blob so UART0 provisioning remains
+    // available. Missing/invalid credentials disable only MQTT/Blynk.
     [[nodiscard]] bool start() noexcept;
-    void mark_control_ready() noexcept;
 
 private:
     class Impl;

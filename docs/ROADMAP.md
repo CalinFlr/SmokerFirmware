@@ -34,9 +34,12 @@ A future item is **not permission to implement it early**.
 - **M14 — durable local history:** implemented for simulated I/O with host,
   browser, guardrail, cross-build, signed connected-board migration, reboot,
   and stack/runtime validation; deliberate Wi-Fi loss remains pending.
-- **M15 — personal Blynk remote access:** specified, not implemented. One owner
-  controls one home smoker through Blynk's existing app and MQTT/TLS service;
-  there is no custom backend, mobile app, domain, or cloud-history sync.
+- **M15 — personal Blynk remote access:** implemented for host and ESP-IDF
+  cross-build validation. One owner controls one home smoker through Blynk's
+  existing app and MQTT/TLS service. KFB003 provisioning, live home-STA/TLS,
+  status, simulated Start/Stop, reboot no-replay, remote-error e-mail, and
+  firmware-check scenarios passed; native mobile UI, phone push, exact broker
+  timing, and deliberate transport-loss scenarios remain target-pending.
 
 Rule-level implementation and validation evidence is in
 `docs/TRACEABILITY.md`.
@@ -563,7 +566,10 @@ safety.
 
 ## M15 — Personal Blynk remote access
 
-Status: **Specified — implementation and validation have not started.**
+Status: **Implemented in software — host/cross-build and Blynk Console
+validated; KFB003 provisioning, live TLS/status/commands, reboot no-replay, and
+firmware check plus remote-error e-mail delivery passed; native mobile/phone
+push and remaining broker/outage scenarios pending.**
 
 M15 provides private remote operation for one owner and one home smoker by
 using the existing Blynk mobile application and Blynk Cloud's standard Device

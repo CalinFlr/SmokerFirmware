@@ -15,9 +15,9 @@ enum class MailboxAdmission {
     Full,
 };
 
-// One HTTP-server producer, one ControlTask consumer. The consumer deliberately
-// leaves moved-from slot storage intact so destruction/reuse happens on the
-// non-critical producer side.
+// One non-critical producer, one ControlTask consumer. Network transports use
+// distinct instances. The consumer deliberately leaves moved-from slot storage
+// intact so destruction/reuse happens on the non-critical producer side.
 class SpscCommandMailbox final {
 public:
     static constexpr std::size_t capacity = 16U;

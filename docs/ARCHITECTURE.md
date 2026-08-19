@@ -74,7 +74,7 @@ Do not create ports before a milestone needs them.
 
 ESP-IDF/hardware-specific implementations.
 
-Current M14 implementations:
+Current M15 implementations:
 
 - simulated chamber/probe sources;
 - simulated heater output;
@@ -92,6 +92,9 @@ Current M14 implementations:
   core-0 `HistoryTask` owning a versioned raw-flash circular log and read-only
   history queries. Storage failure is observable but never enters control or
   safety state.
+- a platform-only Blynk Device MQTT/TLS adapter, two bounded command mailboxes,
+  shared atomic external IDs, UART0/NVS credential provisioning, and one static
+  low-priority core-0 `BlynkTask`. Remote loss cannot enter control or safety.
 
 Future examples:
 
@@ -135,7 +138,7 @@ Its job is to:
 
 Business rules do not belong in `app_main.cpp`.
 
-At M14, `app_main` composes the built-in simulation configuration and delegates
+At M15, `app_main` composes the built-in simulation configuration and delegates
 task/runtime mechanics to `smoker_platform`.
 
 ## Runtime-state ownership
@@ -348,6 +351,12 @@ observation after the safety-gated tick and immutable snapshot publication. It
 never reads UTC, locks a mutex, allocates, logs, queries flash, or waits for
 history. A full mailbox drops an observation and increments an observable
 counter.
+
+M15 adds one static 12 KiB `BlynkTask` on core 0 at priority one, below
+`ControlTask`, and leaves it outside TWDT. ESP-MQTT also runs on core 0. The
+Blynk task observes immutable snapshots once per second and owns MQTT,
+serialization, NVS provisioning, and remote event/result delivery. None of
+those operations is on the heater-control dependency chain.
 
 ## M12 local HTTP and credential boundary
 
@@ -616,8 +625,8 @@ new state owner or control service:
 ```text
 Blynk app
     <-> Blynk Cloud Device MQTT/TLS
-    <-> platform Blynk adapter on core 0
-         -> bounded external command mailbox
+    <-> MQTT callback -> bounded raw allowlist mailbox
+         -> BlynkTask on core 0 -> bounded application command mailbox
          -> ControlTask on core 1 -> SmokerApplication -> safety -> heater
 
 ControlTask
@@ -627,11 +636,18 @@ ControlTask
 ```
 
 MQTT callback context never calls `SmokerApplication::submit()`. It validates
-and translates only allowlisted datastream controls, assigns the existing
-bounded correlation identity, and attempts bounded mailbox admission. Only
-`ControlTask` drains that mailbox and submits the command. A transport-level
-publish or delivery acknowledgment is never presented as semantic command
-acceptance.
+only the datastream name/size allowlist and copies the complete bounded message
+into a raw SPSC mailbox, whose final slot is reserved for Stop. `BlynkTask`
+performs deterministic fixed-buffer parsing and translates accepted messages
+into its distinct application-level SPSC mailbox. Only `ControlTask` drains
+that mailbox and submits the command. A transport-level publish or delivery
+acknowledgment is never presented as semantic command acceptance.
+
+HTTP and Blynk share atomic nonzero session/correlation ID generators which
+skip the internal OTA reservation, including at wraparound. `ControlTask`
+alternates the HTTP/Blynk mailboxes round-robin with one global 13-command
+budget, leaving two regular application-queue slots for internal OTA intents;
+it stops the external drain after the first Stop barrier.
 
 The outbound status adapter retains one fixed-size normalized projection, one
 dirty flag, the last successful status-publish monotonic point, and bounded
@@ -662,8 +678,12 @@ existing rollback policy. M14 raw history remains local; Blynk datastream
 retention is only an auxiliary visualization cache and is not backfilled.
 
 The device token and regional endpoint are platform configuration. The token
-is a non-versioned secret and never enters snapshots, logs, browser assets,
-events, command results, or repository evidence. Blynk loss, credential
+is provisioned through bounded UART0 frames and stored in an unencrypted,
+versioned CRC-protected blob in a separate NVS namespace. It never enters
+snapshots, logs, browser assets, events, command results, or repository
+evidence. Missing or invalid configuration disables only Blynk. The accepted
+physical-extraction risk is explicit because flash/NVS encryption is outside
+M15. Blynk loss, credential
 failure, broker throttling, or quota exhaustion cannot become a dependency of
 the heater-control path.
 
@@ -746,9 +766,9 @@ External sensing/output and electrical-safety gates remain M6B work.
 
 ### Executable architecture guardrails
 
-`tools/check_architecture.py` enforces the M0-M14 layer imports, component graph,
-the sole critical `ControlTask` plus the captive-DNS helper, `OtaTask`, and
-`HistoryTask`,
+`tools/check_architecture.py` enforces the M0-M15 layer imports, component graph,
+the sole critical `ControlTask` plus the captive-DNS helper, `OtaTask`,
+`HistoryTask`, and non-critical `BlynkTask`,
 heater-write owner, single production command-submit site, M12
 transport/core-placement contracts, M13 effective generated configuration,
 signed serial-flash/release contracts, partitions/update placement, exact V0
@@ -756,6 +776,10 @@ session states/command family, single-stage recipe shape, and thin composition
 root. M14 checks additionally cover 32-bit/non-blocking history publication,
 absence of wall-clock/flash work from `ControlTask`, raw-log ownership,
 authenticated read-only routes, and OTA/history serialization.
+M15 checks additionally cover the exact MQTT pin, platform confinement,
+callback isolation, two bounded mailboxes, fair ControlTask draining, static
+core/priority placement, TLS/session/topic settings, provisioning boundaries,
+status/result separation, and bounded payloads.
 `tools/check_traceability.py` requires one explicit matrix row
 for every approved rule and validates concrete host-test references for rules
 marked implemented.

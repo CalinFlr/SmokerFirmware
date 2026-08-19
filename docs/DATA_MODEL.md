@@ -442,6 +442,14 @@ current/available firmware version
 OTA state/progress/error summary
 ```
 
+For the Blynk projection only, the available-version display contains the
+available release tag in `AVAILABLE`, `Latest` in `UP_TO_DATE`, and is empty in
+other OTA states. The separate firmware-state field remains unchanged.
+
+The immutable application snapshot includes `timer_configured` so the platform
+can distinguish no timer (`NONE`) from a configured timer which has not started
+(`WAITING`). This presence bit is application-owned state, not cloud state.
+
 Values are normalized to their Blynk display precision before equality is
 evaluated. The adapter retains exactly a `lastPublished` projection and a
 newest `pending` projection. A difference marks `pending` dirty; subsequent
@@ -451,9 +459,12 @@ time passage alone creates no new status message. Connect/reconnect explicitly
 publishes the newest current projection once.
 
 Correlated command results and critical events are separate bounded message
-types. They may be emitted immediately and are not fields whose delivery
-changes `lastPublished`. MQTT/Blynk delivery state is likewise not application
-runtime state.
+types. `LastCommandResult` is not a `BlynkRemoteStatus` field and is never
+serialized into `batch_ds`; only IDs currently tracked in the bounded Blynk
+pending list can be projected from shared application results. Disconnect
+drops unpublished feedback and events. They may be emitted immediately and are
+not fields whose delivery changes `lastPublished`. MQTT/Blynk delivery state is
+likewise not application runtime state.
 
 Blynk control datastreams represent live user gestures, not desired-state
 ownership. They map only to the existing external command set or to the
@@ -463,6 +474,23 @@ an operation and correlation identity only; it contains no URL, image, signing
 key, or heater command.
 
 ## Persistence groups
+
+### M15 Blynk device configuration
+
+The dedicated `fumuri_blynk` NVS namespace stores one fixed-size, versioned,
+CRC-protected blob containing:
+
+```text
+regional_endpoint
+template_id
+device_token
+```
+
+The blob is accepted only when its exact version, lengths, CRC, regional
+`*.blynk.cloud` endpoint, template identifier, and printable non-empty token
+validate. Missing/corrupt data disables only the Blynk adapter. The token is
+unencrypted at rest in M15 and is never copied into application snapshots or
+HTTP/UI data.
 
 ### M12 connectivity and authentication state
 

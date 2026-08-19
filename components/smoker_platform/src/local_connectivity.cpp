@@ -79,7 +79,7 @@ struct NetworkStatus final {
     bool ap_active{false};
     std::uint32_t sta_ipv4{0U};
     std::array<char, 16U> sta_ip{};
-    std::array<char, 32U> sta_last_error{};
+    std::array<char, 48U> sta_last_error{};
 };
 
 constexpr std::array<std::uint8_t, 4U> persisted_wifi_magic{
@@ -514,12 +514,14 @@ public:
         const app::SnapshotExchange& snapshots,
         FirmwareUpdateService& firmware_updates,
         HistoryService& history,
+        RuntimeIdGenerator& ids,
         core::Recipe startup_recipe
     )
         : command_mailbox_{command_mailbox}
         , snapshots_{snapshots}
         , firmware_updates_{firmware_updates}
         , history_{history}
+        , ids_{ids}
         , startup_recipe_{std::move(startup_recipe)}
     {
     }
@@ -1684,6 +1686,12 @@ private:
                             self->status_.sta_last_error,
                             sta_disconnect_error(disconnected->reason)
                         ));
+                        ESP_LOGW(
+                            tag,
+                            "STA disconnected reason=%u (%s)",
+                            static_cast<unsigned>(disconnected->reason),
+                            self->status_.sta_last_error.data()
+                        );
                     }
                     if (!configuration_disconnect) {
                         self->sta_connect_in_flight_ = false;
@@ -2889,10 +2897,7 @@ private:
             return send_error(request, "400 Bad Request", "versiune semantică invalidă");
         }
 
-        const auto correlation_id = next_command_correlation_id_++;
-        if (next_command_correlation_id_ == 0U) {
-            next_command_correlation_id_ = 1U;
-        }
+        const auto correlation_id = ids_.next_correlation();
         const auto response = build_http_command_admission_body(correlation_id);
         if (response.length == 0U) {
             return send_error(request, "503 Service Unavailable", "răspuns indisponibil");
@@ -3586,10 +3591,9 @@ private:
             }
             auto recipe = startup_recipe_;
             recipe.stage.chamber_target = target;
-            command.emplace(app::StartSessionCommand{next_session_id_++, std::move(recipe)});
-            if (next_session_id_ == 0U) {
-                next_session_id_ = 1U;
-            }
+            command.emplace(app::StartSessionCommand{
+                ids_.next_session(), std::move(recipe)
+            });
         } else if (type_name == "stop_session") {
             if (!has_exact_fields(document.get(), {"type"}, {"type"})) {
                 return send_error(request, "400 Bad Request", "schemă stop_session invalidă");
@@ -3671,10 +3675,7 @@ private:
             return send_error(request, "400 Bad Request", "tip comandă necunoscut");
         }
 
-        const auto correlation_id = next_command_correlation_id_++;
-        if (next_command_correlation_id_ == 0U) {
-            next_command_correlation_id_ = 1U;
-        }
+        const auto correlation_id = ids_.next_correlation();
         const auto response = build_http_command_admission_body(correlation_id);
         if (response.length == 0U) {
             return send_error(
@@ -3707,6 +3708,7 @@ private:
     const app::SnapshotExchange& snapshots_;
     FirmwareUpdateService& firmware_updates_;
     HistoryService& history_;
+    RuntimeIdGenerator& ids_;
     core::Recipe startup_recipe_;
     mutable std::mutex mutex_;
     std::mutex wifi_mode_mutex_;
@@ -3731,8 +3733,6 @@ private:
     std::array<StackType_t, dns_stack_bytes / sizeof(StackType_t)> dns_stack_{};
     std::array<std::uint8_t, dns_packet_bytes> dns_request_{};
     std::array<std::uint8_t, dns_packet_bytes> dns_response_{};
-    core::SessionId next_session_id_{1U};
-    std::uint32_t next_command_correlation_id_{1U};
     nvs_handle_t nvs_handle_{0U};
     esp_netif_t* sta_netif_{nullptr};
     esp_netif_t* ap_netif_{nullptr};
@@ -3758,10 +3758,11 @@ LocalConnectivityService::LocalConnectivityService(
     const app::SnapshotExchange& snapshots,
     FirmwareUpdateService& firmware_updates,
     HistoryService& history,
+    RuntimeIdGenerator& ids,
     core::Recipe startup_recipe
 ) noexcept
     : impl_{new (std::nothrow) Impl{
-          command_mailbox, snapshots, firmware_updates, history,
+          command_mailbox, snapshots, firmware_updates, history, ids,
           std::move(startup_recipe)
       }}
 {

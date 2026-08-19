@@ -92,6 +92,7 @@ bool SnapshotExchange::publish(const SmokerSnapshotView& snapshot) noexcept
     slot.chamber_temperature = snapshot.chamber_temperature;
     slot.chamber_target = snapshot.chamber_target;
     slot.heater_demand = snapshot.heater_demand;
+    slot.timer_configured = snapshot.timer_configured;
     slot.timer = snapshot.timer;
     std::copy(snapshot.probes.begin(), snapshot.probes.end(), slot.probes.begin());
     slot.probe_count = snapshot.probes.size();
@@ -144,6 +145,7 @@ SmokerSnapshotView SnapshotExchange::view(const std::size_t index) const noexcep
         slot.chamber_temperature,
         slot.chamber_target,
         slot.heater_demand,
+        slot.timer_configured,
         slot.timer,
         std::span<const ProbeSnapshotView>{slot.probes.data(), slot.probe_count},
         std::span<const core::Alarm>{slot.alarms.data(), slot.alarm_count},

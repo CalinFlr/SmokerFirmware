@@ -4,11 +4,13 @@
 #include "smoker/app/smoker_application.hpp"
 #include "smoker/app/snapshot_exchange.hpp"
 #include "smoker/platform/local_connectivity.hpp"
+#include "smoker/platform/blynk_service.hpp"
 #include "smoker/platform/firmware_update_service.hpp"
 #include "smoker/platform/flash_operation_coordinator.hpp"
 #include "smoker/platform/history_service.hpp"
 #include "smoker/platform/history_support.hpp"
 #include "smoker/platform/simulated_adapters.hpp"
+#include "smoker/platform/runtime_transport_support.hpp"
 
 #include "esp_check.h"
 #include "esp_chip_info.h"
@@ -58,16 +60,27 @@ public:
               events,
               configuration.safety_limits,
               probes,
-        }
+          }
+        , ids{}
+        , http_mailbox{}
+        , blynk_mailbox{}
         , history_mailbox{probes.size(), (probes.size() * 2U) + 1U}
         , snapshots{probes.size(), (probes.size() * 2U) + 1U}
         , firmware_updates{snapshots, flash_operations}
         , history{history_mailbox, flash_operations}
         , connectivity{
-              mailbox,
+              http_mailbox,
               snapshots,
               firmware_updates,
               history,
+              ids,
+              configuration.startup_recipe,
+          }
+        , blynk{
+              blynk_mailbox,
+              snapshots,
+              firmware_updates,
+              ids,
               std::move(configuration.startup_recipe),
           }
     {
@@ -82,13 +95,16 @@ public:
     SimulatedClock clock;
     SimulatedEventSink events;
     app::SmokerApplication application;
-    app::SpscCommandMailbox mailbox;
+    RuntimeIdGenerator ids;
+    app::SpscCommandMailbox http_mailbox;
+    app::SpscCommandMailbox blynk_mailbox;
     FlashOperationCoordinator flash_operations;
     HistoryObservationMailbox history_mailbox;
     app::SnapshotExchange snapshots;
     FirmwareUpdateService firmware_updates;
     HistoryService history;
     LocalConnectivityService connectivity;
+    BlynkService blynk;
 };
 
 [[nodiscard]] bool subscribe_control_loop_to_watchdog() noexcept
@@ -161,13 +177,11 @@ void control_task(void* const parameter)
     std::optional<float> last_logged_target;
     bool runtime_state_logged = false;
     std::size_t completed_cycles = 0U;
-    app::Command command{app::StopSessionCommand{}};
-    std::uint32_t correlation_id = 0U;
-    const auto submit_to_application = [&context](
-        app::Command command_to_submit,
-        const std::uint32_t command_correlation_id = 0U
-    ) noexcept {
-        return context->application.submit(
+    RoundRobinCommandDrain external_commands;
+    const auto submit_to_application = [](void* const application_context,
+                                          app::Command command_to_submit,
+                                          const std::uint32_t command_correlation_id) noexcept {
+        return static_cast<app::SmokerApplication*>(application_context)->submit(
             std::move(command_to_submit), command_correlation_id
         );
     };
@@ -178,6 +192,7 @@ void control_task(void* const parameter)
                 internal_correlation_id
             )
             && !submit_to_application(
+                &context->application,
                 app::PrepareFirmwareUpdateCommand{}, internal_correlation_id
             )) {
             context->firmware_updates.retry_prepare_request(
@@ -190,18 +205,17 @@ void control_task(void* const parameter)
         // once Prepare is admitted, the application FIFO preserves their order.
         if (!prepare_submission_pending
             && context->firmware_updates.consume_finish_request()
-            && !submit_to_application(app::FinishFirmwareUpdateCommand{})) {
+            && !submit_to_application(
+                &context->application, app::FinishFirmwareUpdateCommand{}, 0U
+            )) {
             context->firmware_updates.retry_finish_request();
         }
-        while (context->mailbox.try_pop(command, &correlation_id)) {
-            const bool is_stop = std::holds_alternative<app::StopSessionCommand>(command);
-            if (!submit_to_application(std::move(command), correlation_id)) {
-                ESP_LOGE(tag, "Application queue rejected an admitted transport command");
-            }
-            if (is_stop) {
-                break;
-            }
-        }
+        static_cast<void>(external_commands.drain(
+            context->http_mailbox,
+            context->blynk_mailbox,
+            &context->application,
+            submit_to_application
+        ));
         context->application.tick();
         const auto snapshot = context->application.snapshot_view();
         static_cast<void>(context->snapshots.publish(snapshot));
@@ -311,6 +325,9 @@ bool start_simulation_runtime(SimulationRuntimeConfiguration configuration) noex
     }
     if (!task_context->connectivity.start()) {
         ESP_LOGE(tag, "Local connectivity unavailable; autonomous ControlTask continues");
+    }
+    if (!task_context->blynk.start()) {
+        ESP_LOGE(tag, "Blynk service unavailable; autonomous ControlTask continues");
     }
     task_context->connectivity.mark_control_ready();
 

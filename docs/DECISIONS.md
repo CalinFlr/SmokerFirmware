@@ -961,3 +961,43 @@ monitoring/alarm inputs: no ADS1115 value or failure directly changes the
 authoritative chamber control, fault policy, or heater demand.
 
 Status: Accepted.
+
+## D058 — M15 pins ESP-MQTT and provisions Blynk through UART0/NVS
+
+M15 uses the official ESP Component Registry dependency `espressif/mqtt`
+exactly at version `1.0.0`, locked at component hash
+`ffdad5659706b4dc14bc63f8eb73ef765efa015bf7e9adf71c813d52a2dc9342`.
+ESP-IDF does not bundle this external component at the project-selected API
+version, and the built-in TLS/CA-bundle facilities remain sufficient; no Blynk
+Library, Edgent, Blynk.Air, Arduino layer, backend, or additional MQTT library
+is introduced.
+
+The client connects directly to a validated regional `*.blynk.cloud` endpoint
+on port 8883 using MQTT 3.1.1, the ESP certificate bundle, username `device`,
+token-as-password, clean session, 45-second keepalive, ten-second reconnect,
+QoS 0, and no retain. Its only subscription is `downlink/ds/#`. It never uses
+`get/ds`, saved-value sync/replay, or `downlink/ota`.
+
+The token is not a build or release secret. A bounded `FUMURI-BLYNK/1` protocol
+over the confirmed KFB003 USB-to-UART0 link performs `set`, redacted `status`,
+and `clear`. Firmware stores endpoint, Template ID, and token in a versioned,
+CRC-protected fixed blob under a dedicated NVS namespace. Missing or invalid
+data disables only Blynk and a successful update restarts its MQTT client.
+M15 explicitly accepts that unencrypted NVS can be extracted with physical
+access; flash/NVS encryption and eFuse provisioning remain future work.
+
+The MQTT callback only copies allowlisted bounded input into a raw SPSC
+mailbox. A static low-priority core-0 `BlynkTask` parses it and produces into a
+second SPSC mailbox. `ControlTask` alternates that mailbox with HTTP under a
+global budget which preserves two regular application slots for OTA intents
+and stops at the first Stop. One atomic generator supplies nonzero HTTP/Blynk
+session and correlation IDs while skipping the internal OTA reservation.
+
+Status, command results, and events remain separate bounded streams. The
+15-field complete status projection is change-driven and five-second
+throttled; correlated results are emitted only for IDs tracked as Blynk
+commands, and the five event types coalesce per type over the same minimum
+interval. Disconnect drops unpublished result/event state and never replays a
+Start or Install gesture.
+
+Status: Accepted.
