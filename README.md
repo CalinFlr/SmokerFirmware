@@ -24,8 +24,9 @@ Official references:
 ## Current implementation status
 
 M0-M5 complete the **V0 simulated application/control slice**. M12 adds local
-Wi-Fi/API/UI, M13 adds manual HTTPS OTA with rollback, and M14 adds durable
-local session history. M14 target persistence/reboot has passed on KFB003; its
+Wi-Fi/API/UI, M13 adds manual HTTPS OTA with rollback, M14 adds durable local
+session history, and M15 adds optional one-owner Blynk Device MQTT access. M14
+target persistence/reboot has passed on KFB003; its
 deliberate Wi-Fi-loss scenario and remaining M12 radio scenarios are still
 explicit gates. None is a claim that product V0 is complete.
 M6A is complete for the final SuooTci `KFB003` ESP32-S3 N16R8 controller:
@@ -250,6 +251,40 @@ records first, so START/END and ordinary lifecycle/change markers remain visible
 an explicit warning reports any additional reduction required by an unusually
 dense change stream.
 
+## Personal Blynk access (M15)
+
+The optional `smoker_platform` Blynk adapter uses the exactly pinned official
+`espressif/mqtt` 1.0.0 component over TLS. It publishes one complete status on
+connect, then only normalized changes with a five-second minimum interval.
+Correlated results and five event types are separate. MQTT callbacks cannot
+submit application commands or write heater output; only `ControlTask` drains
+the distinct HTTP/Blynk command mailboxes.
+
+Credentials are not build inputs. Provision the direct regional endpoint,
+Template ID, and device token through KFB003 USB-to-UART0; the token prompt is
+not echoed or accepted as a command-line argument:
+
+```sh
+python3 tools/provision_blynk.py --port /dev/cu.usbserial-XXXX set \
+  --endpoint fra1.blynk.cloud --template-id TMPLxxxx
+python3 tools/provision_blynk.py --port /dev/cu.usbserial-XXXX status
+python3 tools/provision_blynk.py --port /dev/cu.usbserial-XXXX clear
+```
+
+The versioned NVS blob is unencrypted in M15, so physical extraction remains
+possible. Missing/invalid credentials disable only Blynk. The exact 26
+datastreams, five event codes, and minimal mobile dashboard are defined in
+[`docs/BLYNK_TEMPLATE.md`](docs/BLYNK_TEMPLATE.md). The KFB003 UART provisioning
+and credential persistence across a signed reboot have passed, and the Blynk
+Console template/device, events, and 22-widget web dashboard are configured.
+The provisioned KFB003 has also passed live home-STA association, Blynk TLS and
+online status, simulated Start/Stop with correlated acceptance, heater-OFF
+after Stop, reboot reconnect without Start replay, the M13 firmware-check
+request (`UP_TO_DATE`), and remote-error e-mail delivery. Phone push receipt,
+exact broker-side throttle/silence measurement, deliberate transport loss, and
+the native mobile-app dashboard remain pending; the local controller continues
+without Blynk while STA is unavailable.
+
 ## Firmware update (M13)
 
 The authenticated STA dashboard has an „Actualizare firmware” panel. Check is
@@ -406,7 +441,9 @@ and tests with the same strict C++20 baseline as the target, warnings as errors,
 exceptions disabled, and RTTI disabled.
 CTest reports checkpoints for M2, M3, M4, M5, M12 concurrent
 transport/snapshot exchange, M13 OTA policy/version state, and M14 durable
-history/reconstruction/query behavior in addition to the M1 domain-value tests.
+history/reconstruction/query behavior, plus M15 projection, mailbox,
+provisioning, result, and event behavior in addition to the M1 domain-value
+tests.
 
 Optional host sanitizer validation:
 
@@ -419,7 +456,7 @@ cmake --build build-host-sanitize
 ctest --test-dir build-host-sanitize --output-on-failure
 ```
 
-## M0-M14 verification and architecture guardrails
+## M0-M15 verification and architecture guardrails
 
 The complete local verification entrypoint runs architecture/traceability
 guardrails, native host tests, ASan/UBSan, and the pinned ESP-IDF cross-build:
@@ -473,7 +510,7 @@ compiled as strict C++20. The full/IDF verification modes run it automatically.
 The architecture check guards layer imports, component dependencies, single
 ControlTask ownership, heater writes, command submission, M12 transport/core
 placement, M13 OTA task/API/release contracts, M14 history isolation/API/
-partition contracts, and the deliberately
+partition contracts, M15 MQTT/provisioning/task/mailbox contracts, and the deliberately
 small V0 state/command shape. The traceability check requires exactly one row
 for every approved rule and verifies concrete host-test references. GitHub CI
 runs these checks with host tests/sanitizers and a separate ESP-IDF v6.0.2
@@ -583,10 +620,11 @@ The V0 simulated application/control slice includes:
 - safety override;
 - host tests for core business rules.
 
-Wi-Fi provisioning, local HTTP/UI, M13 OTA, and M14 simulated-I/O session
-history software are present. M14 history is not M10 session/power recovery.
-No display, real SSR, active real temperature adapter, fan, smoke generator, or
-cloud has been added. The exact-pinned `esp-idf-lib/max31865` 1.0.8 registry
+Wi-Fi provisioning, local HTTP/UI, M13 OTA, M14 simulated-I/O session history,
+and optional M15 Blynk client software are present. M14 history is not M10
+session/power recovery, and Blynk is not authoritative cloud control. No
+display, real SSR, active real temperature adapter, fan, or smoke generator has
+been added. The exact-pinned `esp-idf-lib/max31865` 1.0.8 registry
 driver is now present as M7 preparation, but production still uses the
 simulated chamber source until the physical module, RTD, wiring, reference
 resistor, and GPIO facts close the chamber part of M6B. No physical heater or hardware-safety
@@ -602,6 +640,13 @@ this is OTA-path evidence, not a sensor, SSR, thermal, or independent
 hardware-safety test. The signed M14 partition migration, NVS preservation,
 minute-sample history, live target/alarm change, and reboot reconstruction also
 passed with simulated I/O; deliberate Wi-Fi-loss-during-RUNNING remains open.
+M15 UART provisioning and on-board NVS persistence across a signed reboot have
+passed on KFB003. The owner Console template/device, 26 datastreams, five events,
+and 22-widget web dashboard are configured. Live home-STA/TLS/online status,
+simulated Start/Stop with heater-OFF after Stop, reboot reconnect/no-Start-replay,
+remote-error e-mail delivery, and a Blynk-triggered M13 firmware check passed.
+Phone push receipt, exact broker timing/silence, deliberate transport loss, and
+native mobile-dashboard validation remain open.
 
 The controller product baseline cannot be considered complete before M6B and
 M7-M10 identify and integrate the remaining real hardware and implement

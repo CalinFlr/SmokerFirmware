@@ -562,6 +562,7 @@ SmokerSnapshotView snapshot(
         temperature(80.0F),
         temperature(110.0F),
         *smoker::core::HeaterDemand::from_percent(50.0F),
+        false,
         {},
         std::span<const ProbeSnapshotView>{&probe, 1U},
         alarms,

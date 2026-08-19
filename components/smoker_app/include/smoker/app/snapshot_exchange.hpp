@@ -55,6 +55,7 @@ private:
         std::optional<core::Temperature> chamber_temperature;
         std::optional<core::Temperature> chamber_target;
         core::HeaterDemand heater_demand{core::HeaterDemand::off()};
+        bool timer_configured{false};
         core::TimerRuntimeState timer;
         std::vector<ProbeSnapshotView> probes;
         std::size_t probe_count{0U};

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the generated ESP-IDF configuration required by M14."""
+"""Validate the generated ESP-IDF configuration required through M15."""
 
 from __future__ import annotations
 
@@ -25,10 +25,18 @@ REQUIRED_VALUES = {
     "CONFIG_SECURE_SIGNED_APPS_NO_SECURE_BOOT": "y",
     "CONFIG_SECURE_SIGNED_APPS_RSA_SCHEME": "y",
     "CONFIG_SECURE_SIGNED_ON_UPDATE_NO_SECURE_BOOT": "y",
+    "CONFIG_MQTT_PROTOCOL_311": "y",
+    "CONFIG_MQTT_TRANSPORT_SSL": "y",
+    "CONFIG_MQTT_SKIP_PUBLISH_IF_DISCONNECTED": "y",
+    "CONFIG_MQTT_TASK_CORE_SELECTION_ENABLED": "y",
+    "CONFIG_MQTT_USE_CORE_0": "y",
 }
 
 REQUIRED_UNSET = {
     "CONFIG_SECURE_BOOT_BUILD_SIGNED_BINARIES",
+    "CONFIG_MQTT_PROTOCOL_5",
+    "CONFIG_MQTT_TRANSPORT_WEBSOCKET",
+    "CONFIG_MQTT_USE_CORE_1",
 }
 
 
@@ -65,14 +73,14 @@ def configuration_failures(path: Path) -> list[str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Check the effective generated ESP-IDF M14 configuration."
+        description="Check the effective generated ESP-IDF M15 configuration."
     )
     parser.add_argument("sdkconfig", type=Path)
     arguments = parser.parse_args()
 
     failures = configuration_failures(arguments.sdkconfig)
     if failures:
-        print("Effective M14 sdkconfig check failed:", file=sys.stderr)
+        print("Effective M15 sdkconfig check failed:", file=sys.stderr)
         for failure in failures:
             print(f"  - {failure}", file=sys.stderr)
         print(
@@ -81,7 +89,7 @@ def main() -> int:
         )
         return 1
 
-    print(f"Effective M14 sdkconfig: PASS ({arguments.sdkconfig})")
+    print(f"Effective M15 sdkconfig: PASS ({arguments.sdkconfig})")
     return 0
 
 

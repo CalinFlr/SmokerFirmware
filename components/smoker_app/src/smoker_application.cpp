@@ -163,6 +163,7 @@ SmokerSnapshot SmokerApplication::snapshot() const
         result.recipe_snapshot = session_->recipe_snapshot;
         result.stop_reason = session_->stop_reason;
         result.chamber_target = session_->active_chamber_target;
+        result.timer_configured = session_->recipe_snapshot.stage.timer.has_value();
         result.timer = session_->timer;
     }
 
@@ -197,6 +198,7 @@ SmokerSnapshotView SmokerApplication::snapshot_view() const noexcept
         chamber_temperature_,
         std::nullopt,
         heater_demand_,
+        false,
         {},
         std::span<const ProbeSnapshotView>{probe_snapshot_views_},
         std::span<const core::Alarm>{active_alarm_snapshot_},
@@ -210,6 +212,7 @@ SmokerSnapshotView SmokerApplication::snapshot_view() const noexcept
         result.session_id = session_->id;
         result.stop_reason = session_->stop_reason;
         result.chamber_target = session_->active_chamber_target;
+        result.timer_configured = session_->recipe_snapshot.stage.timer.has_value();
         result.timer = session_->timer;
     }
     return result;

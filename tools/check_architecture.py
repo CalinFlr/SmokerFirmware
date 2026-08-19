@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail when the M0-M14 source tree violates approved architecture boundaries."""
+"""Fail when the M0-M15 source tree violates approved architecture boundaries."""
 
 from __future__ import annotations
 
@@ -95,19 +95,23 @@ def check_control_ownership(failures: CheckFailures) -> None:
     expected_connectivity = "components/smoker_platform/src/local_connectivity.cpp"
     expected_ota = "components/smoker_platform/src/firmware_update_service.cpp"
     expected_history = "components/smoker_platform/src/history_service.cpp"
+    expected_blynk = "components/smoker_platform/src/blynk_service.cpp"
     expected_history_support = "components/smoker_platform/src/history_support.cpp"
     expected_application = "components/smoker_app/src/smoker_application.cpp"
 
     task_calls = find_calls(r"\bxTaskCreate(?:Static)?(?:PinnedToCore)?\s*\(", production)
     failures.require(
-        len(task_calls) == 4,
-        "M14 must contain only ControlTask, OtaTask, HistoryTask, and the captive DNS helper task; "
+        len(task_calls) == 5,
+        "M15 must contain only ControlTask, OtaTask, HistoryTask, BlynkTask, and the captive DNS helper task; "
         f"found {len(task_calls)} task-creation calls",
     )
     task_owners = {relative(path) for path, _ in task_calls}
     failures.require(
-        task_owners == {expected_runtime, expected_connectivity, expected_ota, expected_history},
-        "task creation must be limited to ControlTask, OtaTask, HistoryTask, and captive DNS; "
+        task_owners == {
+            expected_runtime, expected_connectivity, expected_ota,
+            expected_history, expected_blynk,
+        },
+        "task creation must be limited to ControlTask, OtaTask, HistoryTask, BlynkTask, and captive DNS; "
         f"found owners {sorted(task_owners)}",
     )
 
@@ -126,10 +130,10 @@ def check_control_ownership(failures: CheckFailures) -> None:
             f"writes; found one in {relative(path)}",
         )
 
-    submit_calls = find_calls(r"\.\s*submit\s*\(", production)
+    submit_calls = find_calls(r"(?:\.|->)\s*submit\s*\(", production)
     failures.require(
         len(submit_calls) == 1,
-        f"M12 production must have one ControlTask-owned submit call site; found {len(submit_calls)}",
+        f"M15 production must have one ControlTask-owned submit call site; found {len(submit_calls)}",
     )
     for path, _ in submit_calls:
         failures.require(
@@ -319,8 +323,10 @@ def check_m12_transport_contract(failures: CheckFailures) -> None:
     m12_tests = (ROOT / "tests/host/smoker_m12_tests.cpp").read_text()
 
     failures.require(
-        "context->mailbox.try_pop(command, &correlation_id)" in runtime
-        and "submit_to_application(std::move(command), correlation_id)" in runtime,
+        "external_commands.drain(" in runtime
+        and "context->http_mailbox" in runtime
+        and "context->blynk_mailbox" in runtime
+        and "submit_to_application" in runtime,
         "ControlTask must be the mailbox consumer and sole application submit owner",
     )
     failures.require(
@@ -679,8 +685,8 @@ def check_m12_transport_contract(failures: CheckFailures) -> None:
     decisions = (ROOT / "docs/DECISIONS.md").read_text()
     decision_ids = [int(value) for value in re.findall(r"^## D(\d{3})\b", decisions, re.MULTILINE)]
     failures.require(
-        decision_ids == list(range(1, 58)),
-        f"decision IDs must remain ordered and contiguous through D057; found {decision_ids}",
+        decision_ids == list(range(1, 59)),
+        f"decision IDs must remain ordered and contiguous through D058; found {decision_ids}",
     )
     failures.require(
         "## D051 — Missing independent release review is conditional on single-maintainer access"
@@ -746,6 +752,17 @@ def check_m12_transport_contract(failures: CheckFailures) -> None:
         and "compose simulated probe sources" in decisions
         and "no ADS1115 value or failure directly changes" in decisions,
         "D057 must preserve the exact-pinned dual-ADS1115 dependency, physical gate, and monitoring-only boundary",
+    )
+    failures.require(
+        "## D058 — M15 pins ESP-MQTT and provisions Blynk through UART0/NVS"
+        in decisions
+        and "espressif/mqtt" in decisions
+        and "ffdad5659706b4dc14bc63f8eb73ef765efa015bf7e9adf71c813d52a2dc9342"
+        in decisions
+        and "FUMURI-BLYNK/1" in decisions
+        and "unencrypted NVS" in decisions
+        and "second SPSC mailbox" in decisions,
+        "D058 must preserve the exact MQTT pin, UART/NVS risk, and two-mailbox boundary",
     )
 
     workflow = "\n".join(
@@ -1021,6 +1038,176 @@ def check_m14_history_contract(failures: CheckFailures) -> None:
         failures.require(evidence in tests, f"M14 host evidence is missing: {evidence}")
 
 
+def check_m15_blynk_contract(failures: CheckFailures) -> None:
+    platform = ROOT / "components/smoker_platform"
+    service = (platform / "src/blynk_service.cpp").read_text()
+    commands = (platform / "src/blynk_command_support.cpp").read_text()
+    command_header = (
+        platform / "include/smoker/platform/blynk_command_support.hpp"
+    ).read_text()
+    remote = (platform / "src/blynk_remote_support.cpp").read_text()
+    remote_header = (
+        platform / "include/smoker/platform/blynk_remote_support.hpp"
+    ).read_text()
+    provisioning = (platform / "src/blynk_provisioning_support.cpp").read_text()
+    runtime_support = (platform / "src/runtime_transport_support.cpp").read_text()
+    runtime_header = (
+        platform / "include/smoker/platform/runtime_transport_support.hpp"
+    ).read_text()
+    runtime = (platform / "src/simulation_runtime.cpp").read_text()
+    manifest = (platform / "idf_component.yml").read_text()
+    lock = (ROOT / "dependencies.lock").read_text()
+    defaults = (ROOT / "sdkconfig.defaults").read_text()
+    tool = (ROOT / "tools/provision_blynk.py").read_text()
+    tests = (ROOT / "tests/host/smoker_m15_tests.cpp").read_text()
+
+    non_platform = "\n".join(
+        path.read_text()
+        for path in source_files("components/smoker_core", "components/smoker_app", "main")
+    )
+    failures.require(
+        "blynk" not in non_platform.lower() and "mqtt_client" not in non_platform,
+        "Blynk and MQTT implementation identifiers must remain confined to smoker_platform",
+    )
+    failures.require(
+        'espressif/mqtt: "==1.0.0"' in manifest
+        and "espressif/mqtt:" in lock
+        and "version: 1.0.0" in lock
+        and "ffdad5659706b4dc14bc63f8eb73ef765efa015bf7e9adf71c813d52a2dc9342"
+        in lock,
+        "M15 must exact-pin and lock official espressif/mqtt 1.0.0",
+    )
+
+    callback = source_section(service, "    void mqtt_event(", "    void run()")
+    failures.require(
+        bool(callback)
+        and "inbound_.push(datastream, payload)" in callback
+        and "is_blynk_control_datastream" not in callback
+        and "submit(" not in callback
+        and "heater" not in callback.lower(),
+        "the MQTT callback must only perform connection bookkeeping and bounded raw-mailbox copy",
+    )
+    failures.require(
+        "constexpr std::array<std::string_view, 10U> control_datastreams" in commands
+        and "blynk_inbound_capacity = 16U" in command_header
+        and "blynk_inbound_capacity - 1U" in commands
+        and 'datastream == "CmdStop" && payload == "1"' in commands
+        and "parse_decimal_milli" in commands
+        and "void BlynkCommandMapper::disconnected()" in commands
+        and "mapper_.disconnected()" in service
+        and "std::from_chars" not in source_section(
+            commands, "parse_decimal_milli(", "parse_temperature("
+        ),
+        "Blynk ingress must use the exact allowlist, fixed decimal parser, and reserved Stop slot",
+    )
+    failures.require(
+        "app::SpscCommandMailbox http_mailbox" in runtime
+        and "app::SpscCommandMailbox blynk_mailbox" in runtime
+        and "external_commands.drain(" in runtime
+        and "external_budget_per_cycle" in runtime_header
+        and "regular_admission_capacity - 2U" in runtime_header
+        and "blynk_first_ = !blynk_first_" in runtime_support
+        and "if (is_stop)" in runtime_support,
+        "ControlTask must fairly drain distinct HTTP/Blynk mailboxes with OTA headroom and Stop barrier",
+    )
+    failures.require(
+        "std::atomic<std::uint32_t> session_sequence_" in runtime_header
+        and "std::atomic<std::uint32_t> correlation_sequence_" in runtime_header
+        and "internal_ota_correlation_id = 0xFFFFFFFEU" in runtime_header
+        and "reserved_id(value)" in runtime_support,
+        "HTTP/Blynk IDs must share atomic nonzero wrap-safe generators and skip internal OTA",
+    )
+
+    failures.require(
+        "DRAM_ATTR StaticTask_t blynk_task_storage" in service
+        and "blynk_task_stack_size_bytes = 12U * 1024U" in service
+        and "blynk_task_priority = tskIDLE_PRIORITY + 1U" in service
+        and re.search(
+            r'xTaskCreateStaticPinnedToCore\(.*?"BlynkTask".*?\n\s*0\s*\n\s*\);',
+            service,
+            re.DOTALL,
+        ) is not None
+        and "esp_task_wdt_add" not in service
+        and "snapshot_period_ms = 1000" in service,
+        "BlynkTask must be static 12 KiB, low priority, core 0, 1 Hz, and outside TWDT",
+    )
+    for required in (
+        "MQTT_TRANSPORT_OVER_SSL",
+        "esp_crt_bundle_attach",
+        "broker_port = 8883U",
+        'credentials.username = "device"',
+        "MQTT_PROTOCOL_V_3_1_1",
+        "keepalive_seconds = 45U",
+        "disable_clean_session = false",
+        "reconnect_timeout_ms = reconnect_timeout_ms",
+        'downlink_subscription[] = "downlink/ds/#"',
+        "payload.data(),",
+        "static_cast<int>(payload.size()), 0, 0",
+    ):
+        failures.require(required in service, f"M15 MQTT contract is missing: {required}")
+    for forbidden in ('"get/ds', '"downlink/ota', "MQTT_PROTOCOL_V_5", "BlynkAir"):
+        failures.require(forbidden not in service, f"forbidden Blynk MQTT behavior is present: {forbidden}")
+    failures.require(
+        "CONFIG_MQTT_TASK_CORE_SELECTION_ENABLED=y" in defaults
+        and "CONFIG_MQTT_USE_CORE_0=y" in defaults
+        and "CONFIG_MQTT_SKIP_PUBLISH_IF_DISCONNECTED=y" in defaults
+        and "# CONFIG_MQTT_TRANSPORT_WEBSOCKET is not set" in defaults,
+        "sdkconfig.defaults must keep ESP-MQTT on core 0 and disable queued-disconnected/WebSocket behavior",
+    )
+
+    failures.require(
+        "timer_configured" in remote
+        and 'result_topic[] = "ds/LastCommandResult"' in service
+        and "LastCommandResult" not in source_section(
+            remote, "serialize_blynk_batch(", "BlynkRemoteProjection::observe"
+        )
+        and "blynk_payload_capacity = 960U" in remote_header
+        and "blynk_status_minimum_interval_ms = 5000" in remote_header
+        and "publish_succeeded" in remote_header
+        and "results_.disconnected()" in service
+        and "events_.disconnected()" in service,
+        "status, result, event, timer-presence, payload, retry, and disconnect contracts are incomplete",
+    )
+    failures.require(
+        'nvs_namespace[] = "fumuri_blynk"' in service
+        and "FUMURI-BLYNK/1" in service
+        and "blob_version = 1U" in provisioning
+        and 'suffix = ".blynk.cloud"' in provisioning
+        and "blynk_frame_crc32" in provisioning
+        and "getpass.getpass" in tool
+        and "--token" not in tool
+        and 'subparsers.add_parser("status")' in tool
+        and 'subparsers.add_parser("clear")' in tool
+        and "configuration_.token.data()" not in source_section(
+            service, "    void handle_provisioning(", "    void write_uart_response("
+        ),
+        "M15 provisioning must be bounded, redacted, versioned, regional, and CRC-protected",
+    )
+    repository_sources = "\n".join(
+        path.read_text(errors="ignore")
+        for root in ("components", "main", "tools")
+        for path in (ROOT / root).rglob("*")
+        if path.is_file() and (path.suffix in SOURCE_SUFFIXES or path.suffix == ".py")
+        and path != Path(__file__).resolve()
+    )
+    failures.require(
+        "BLYNK_AUTH_TOKEN" not in repository_sources
+        and "local-secrets/blynk" not in repository_sources,
+        "a build-time Blynk credential hook or token macro is forbidden",
+    )
+    for evidence in (
+        "test_projection_connect_throttle_coalescing_and_retry",
+        "test_status_timer_normalization_and_serializer_budget",
+        "test_allowlisted_deterministic_command_mapping",
+        "test_raw_mailbox_stop_reservation_and_concurrency",
+        "test_control_is_independent_of_blynk_transport",
+        "test_shared_ids_wrap_concurrency_and_fair_drain",
+        "test_results_and_events_are_separate_and_not_replayed",
+        "test_provisioning_blob_and_fragmented_parser",
+    ):
+        failures.require(evidence in tests, f"M15 host evidence is missing: {evidence}")
+
+
 def main() -> int:
     failures = CheckFailures()
     check_layer_includes(failures)
@@ -1030,6 +1217,7 @@ def main() -> int:
     check_reproducible_build_contract(failures)
     check_m12_transport_contract(failures)
     check_m14_history_contract(failures)
+    check_m15_blynk_contract(failures)
     return failures.finish()
 
 

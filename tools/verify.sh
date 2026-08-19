@@ -143,4 +143,4 @@ if [[ "$mode" != "--host-only" ]]; then
     run_idf_validation
 fi
 
-echo "M0-M14 verification: PASS ($mode)"
+echo "M0-M15 verification: PASS ($mode)"

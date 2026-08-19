@@ -1,9 +1,11 @@
 # M0-M15 Requirements Traceability
 
-Status: **M14 software/history implementation and connected-target persistence
-validated; the deliberate Wi-Fi-loss scenario, M12 radio edge cases, and
-external-hardware safety remain pending; M15 Blynk remote access is specified
-but not implemented**
+Status: **M15 software is host/sanitizer and ESP-IDF cross-build validated;
+Blynk Console is configured and KFB003 provisioning, live TLS/status/commands,
+reboot no-replay, firmware check, and remote-error e-mail delivery passed;
+phone push receipt, native mobile layout, exact broker timing, deliberate
+transport loss, the M14 Wi-Fi-loss scenario, M12 radio edge cases, and
+external-hardware safety remain pending**
 
 This matrix separates implementation status from validation strength. A rule is
 not considered target- or hardware-validated merely because host tests or an
@@ -25,7 +27,8 @@ ESP-IDF cross-build pass.
 
 Test names below refer to functions in `tests/host/smoker_core_tests.cpp`,
 `tests/host/smoker_v0_tests.cpp`, `tests/host/smoker_m12_tests.cpp`, and
-`tests/host/smoker_m13_tests.cpp`, and `tests/host/smoker_m14_tests.cpp`. All host test groups are registered in
+`tests/host/smoker_m13_tests.cpp`, `tests/host/smoker_m14_tests.cpp`, and
+`tests/host/smoker_m15_tests.cpp`. All host test groups are registered in
 `tests/CMakeLists.txt`.
 
 ## Business rules
@@ -62,12 +65,12 @@ Test names below refer to functions in `tests/host/smoker_core_tests.cpp`,
 
 | Rule | Milestone/status | Implementation evidence | Test/evidence | Validation |
 |---|---|---|---|---|
-| RA-001 | M15 specified | Blynk is confined to an auxiliary personal-client transport and cannot become a local control/timer/safety input | M15 plan, D054, architecture and safety review | Deferred M15 |
-| RA-002 | M15 specified | allowlisted Blynk controls are required to cross the existing bounded command/permission paths and await semantic results | M15 plan and command-boundary review | Deferred M15 |
-| RA-003 | M15 specified | one connect snapshot plus normalized change detection, five-second minimum interval, newest-value coalescing, and no unchanged heartbeat are the required publication contract | planned M15 projection/throttle host tests and target message observation | Deferred M15 |
-| RA-004 | M15 specified | bounded command results and configured critical events are separate from the throttled complete status projection | planned M15 result/event host tests and phone notification scenario | Deferred M15 |
-| RA-005 | M15 specified | Start and OTA-install controls are live gestures and may not be restored/synchronized on MQTT reconnect | planned reconnect/no-replay host and KFB003 tests | Deferred M15 |
-| RA-006 | M15 specified | Blynk supplies only check/install intent; fixed-source signed M13 GitHub OTA remains the download, permission, verification, and rollback path | D050/D054 review and planned Blynk-triggered M13 target scenario | Deferred M15 |
+| RA-001 | M15 implemented | Blynk/MQTT is platform-only, observes immutable snapshots, and has no heater/control dependency; service startup failure is non-fatal | `test_control_is_independent_of_blynk_transport`; architecture guardrail; KFB003 live online status and safe reboot | H-pass, B-pass, Guardrail, T-pass startup/live path; deliberate outage pending |
+| RA-002 | M15 implemented | callback allowlist crosses a reserved-Stop raw SPSC mailbox, BlynkTask mapping, a second application SPSC mailbox, and ControlTask-only round-robin submission; results are correlation-filtered | `test_allowlisted_deterministic_command_mapping`, `test_raw_mailbox_stop_reservation_and_concurrency`, `test_shared_ids_wrap_concurrency_and_fair_drain`, `test_results_and_events_are_separate_and_not_replayed`; KFB003 Blynk Start/Stop results | H-pass, B-pass, Guardrail, T-pass Start/Stop |
+| RA-003 | M15 implemented | one complete connect projection plus normalized equality, five-second minimum, newest-value coalescing, retry, and unchanged silence | `test_projection_connect_throttle_coalescing_and_retry`, `test_status_timer_normalization_and_serializer_budget`; KFB003 initial live status | H-pass, B-pass; T-pass initial projection, exact broker timing/silence pending |
+| RA-004 | M15 implemented | `LastCommandResult` and five per-type throttled/coalesced events are separate from the 15-field bounded `batch_ds` projection | `test_status_timer_normalization_and_serializer_budget`, `test_results_and_events_are_separate_and_not_replayed`; enabled Console events, live malformed-command trigger, owner-confirmed e-mail | H-pass, B-pass; T-pass event/e-mail, phone push pending |
+| RA-005 | M15 implemented | clean session, no get/sync/retained publish, raw input and unpublished feedback/event state discarded on disconnect; no Start/Install source exists outside live downlink | `test_results_and_events_are_separate_and_not_replayed`, `test_raw_mailbox_stop_reservation_and_concurrency`; MQTT source guardrail; KFB003 reboot after Stop | H-pass, B-pass, Guardrail, T-pass reboot/no-Start-replay; transport-only outage pending |
+| RA-006 | M15 implemented | Blynk mapper emits only check/install intent into the existing fixed-source M13 service; it carries no URL/image | `test_allowlisted_deterministic_command_mapping`, `test_application_update_permission`; D050/D054/D058 guardrail; KFB003 Blynk firmware check | H-pass, B-pass, Guardrail, T-pass check; install release-gated |
 
 ## Session rules
 
@@ -193,6 +196,17 @@ download, two-slot boot, mark-valid, forced rollback, and final reinstall.
 | history UI/API remain local and read-only | two authenticated operational GET routes, commissioning rejection, strict queries, no external assets, full pagination through terminal END, and a 1,200-point browser budget that drops SAMPLE first | HTTP fixture and Playwright dense-change/terminal-END plus responsive/pagination checks; KFB003 authenticated history reads | H-pass, B-pass, Browser-pass; T-pass operational API |
 | partition migration is explicit | preserved 24 KiB NVS plus dual 3 MiB OTA and exact 4 MiB history partition; ordinary unsigned/partial flash remains blocked | `tools/check_partitions.py`, signed-helper preflight, ESP-IDF build; signed KFB003 readback/NVS comparison | B-pass, Guardrail, T-pass |
 
+## M15 Blynk/runtime contracts
+
+| Contract | Implementation evidence | Test/evidence | Validation |
+|---|---|---|---|
+| Blynk cannot own or block control | platform-only task/callback and two SPSC transports; start failure is logged after ControlTask creation | `test_control_is_independent_of_blynk_transport`; architecture guardrail; live KFB003 boot/status | H-pass, B-pass, Guardrail, T-pass normal path; outage pending |
+| external commands preserve bounded fairness | shared atomic IDs skip zero/internal OTA; HTTP/Blynk alternate under a 13-command budget and stop after Stop | `test_shared_ids_wrap_concurrency_and_fair_drain` | H-pass, B-pass |
+| status is complete, bounded, and change-driven | 15 normalized fields, explicit timer presence, candidate/commit retry, 960-byte payload capacity under the 1,024-byte public limit | `test_projection_connect_throttle_coalescing_and_retry`, `test_status_timer_normalization_and_serializer_budget`; live KFB003 initial/reconnect status | H-pass, B-pass, T-pass projection; exact broker timing/silence pending |
+| result/event streams are isolated and non-replayed | bounded Blynk-only correlation filter, five event schedulers, disconnect clearing, no control datastream readback | `test_results_and_events_are_separate_and_not_replayed`; live Start/Stop results, reboot no replay, enabled event trigger and owner-confirmed e-mail | H-pass, B-pass, Guardrail, T-pass result/no-replay/e-mail; phone push pending |
+| credentials are provisioned without repository secrets | bounded UART0 `FUMURI-BLYNK/1` set/status/clear, versioned CRC NVS blob, redacted status, invalid data disables only Blynk | `test_provisioning_blob_and_fragmented_parser`; token-source guardrail; KFB003 redacted status after signed reboot | H-pass, B-pass, Guardrail, T-pass provisioning/persistence |
+| MQTT contract is exact and reproducible | `espressif/mqtt ==1.0.0`, TLS CA bundle, MQTT 3.1.1, regional port 8883, clean session, 45-second keepalive, ten-second reconnect, QoS0/no retain, one downlink subscription | dependency/source/effective-sdkconfig guardrails; KFB003 regional TLS certificate and online state | B-pass, Guardrail, T-pass live TLS/connect |
+
 ## M0 sign-off/reproducibility contracts
 
 | Contract | Evidence | Validation |
@@ -222,4 +236,10 @@ The following cannot be closed by M0-M5:
 - M14 signed full-serial migration, preserved NVS, durable START/sample/CHANGE/
   END across reboot, API counters, and HistoryTask affinity/stack have passed on
   KFB003 using simulated I/O; deliberate Wi-Fi-loss-during-RUNNING and injected
-  target flash-failure behavior remain pending.
+  target flash-failure behavior remain pending;
+- measure the exact initial-snapshot count and five-second/silence behavior at
+  the broker, confirm phone push receipt and the native mobile layout,
+  and execute deliberate Wi-Fi/Blynk-loss isolation without replay. Live TLS,
+  status, Start/Stop semantic results, reboot no replay, remote-error e-mail,
+  and the safe firmware-check path passed on KFB003. A real signed `v0.15.0`
+  install remains separately gated on authorization of its public release.

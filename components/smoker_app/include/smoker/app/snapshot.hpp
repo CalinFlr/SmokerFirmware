@@ -29,6 +29,7 @@ struct SmokerSnapshot final {
     std::optional<core::Temperature> chamber_temperature;
     std::optional<core::Temperature> chamber_target;
     core::HeaterDemand heater_demand{core::HeaterDemand::off()};
+    bool timer_configured{false};
     core::TimerRuntimeState timer;
     std::vector<ProbeSnapshot> probes;
     std::vector<core::Alarm> active_alarms;

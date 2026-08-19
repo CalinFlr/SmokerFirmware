@@ -39,21 +39,28 @@ if(BUILD_TESTING)
         "host/smoker_m14_tests.cpp"
     )
 
+    add_executable(smoker_m15_tests
+        "host/smoker_m15_tests.cpp"
+    )
+
     target_link_libraries(smoker_core_tests PRIVATE smoker_core)
     target_link_libraries(smoker_v0_tests PRIVATE smoker_platform)
     target_link_libraries(smoker_m12_tests PRIVATE smoker_platform Threads::Threads)
     target_link_libraries(smoker_m13_tests PRIVATE smoker_platform)
     target_link_libraries(smoker_m14_tests PRIVATE smoker_platform Threads::Threads)
+    target_link_libraries(smoker_m15_tests PRIVATE smoker_platform Threads::Threads)
     target_compile_features(smoker_core_tests PRIVATE cxx_std_20)
     target_compile_features(smoker_v0_tests PRIVATE cxx_std_20)
     target_compile_features(smoker_m12_tests PRIVATE cxx_std_20)
     target_compile_features(smoker_m13_tests PRIVATE cxx_std_20)
     target_compile_features(smoker_m14_tests PRIVATE cxx_std_20)
+    target_compile_features(smoker_m15_tests PRIVATE cxx_std_20)
     set_target_properties(smoker_core_tests PROPERTIES CXX_EXTENSIONS OFF)
     set_target_properties(smoker_v0_tests PROPERTIES CXX_EXTENSIONS OFF)
     set_target_properties(smoker_m12_tests PROPERTIES CXX_EXTENSIONS OFF)
     set_target_properties(smoker_m13_tests PROPERTIES CXX_EXTENSIONS OFF)
     set_target_properties(smoker_m14_tests PROPERTIES CXX_EXTENSIONS OFF)
+    set_target_properties(smoker_m15_tests PROPERTIES CXX_EXTENSIONS OFF)
 
     if(CMAKE_CXX_COMPILER_ID MATCHES "AppleClang|Clang|GNU")
         target_compile_options(smoker_core PRIVATE -Werror -fno-exceptions -fno-rtti)
@@ -109,6 +116,16 @@ if(BUILD_TESTING)
             -fno-exceptions
             -fno-rtti
         )
+        target_compile_options(smoker_m15_tests PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+            -Wconversion
+            -Wsign-conversion
+            -Werror
+            -fno-exceptions
+            -fno-rtti
+        )
     endif()
 
     add_test(NAME smoker_core.domain COMMAND smoker_core_tests)
@@ -119,4 +136,5 @@ if(BUILD_TESTING)
     add_test(NAME smoker_v0.m12_transport COMMAND smoker_m12_tests)
     add_test(NAME smoker_v0.m13_ota_policy COMMAND smoker_m13_tests)
     add_test(NAME smoker_v0.m14_history COMMAND smoker_m14_tests)
+    add_test(NAME smoker_v0.m15_blynk_projection COMMAND smoker_m15_tests)
 endif()

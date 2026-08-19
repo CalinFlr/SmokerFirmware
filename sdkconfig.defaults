@@ -32,6 +32,13 @@ CONFIG_ESP_WIFI_TASK_PINNED_TO_CORE_0=y
 CONFIG_LWIP_TCPIP_TASK_AFFINITY_CPU0=y
 CONFIG_ESP_TIMER_TASK_AFFINITY_CPU0=y
 
+# M15 ESP-MQTT runs its own low-priority worker on the non-critical core. The
+# project BlynkTask is also statically pinned to core 0 in smoker_platform.
+CONFIG_MQTT_TASK_CORE_SELECTION_ENABLED=y
+CONFIG_MQTT_USE_CORE_0=y
+CONFIG_MQTT_SKIP_PUBLISH_IF_DISCONNECTED=y
+# CONFIG_MQTT_TRANSPORT_WEBSOCKET is not set
+
 # The single critical control loop is subscribed at runtime. A stall triggers
 # a panic/reset; every reset reconstructs the application with heater OFF.
 CONFIG_ESP_TASK_WDT_INIT=y
