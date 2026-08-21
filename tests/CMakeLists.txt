@@ -31,6 +31,10 @@ if(BUILD_TESTING)
         "host/smoker_m12_tests.cpp"
     )
 
+    add_executable(smoker_m7_tests
+        "host/smoker_m7_tests.cpp"
+    )
+
     add_executable(smoker_m13_tests
         "host/smoker_m13_tests.cpp"
     )
@@ -45,18 +49,21 @@ if(BUILD_TESTING)
 
     target_link_libraries(smoker_core_tests PRIVATE smoker_core)
     target_link_libraries(smoker_v0_tests PRIVATE smoker_platform)
+    target_link_libraries(smoker_m7_tests PRIVATE smoker_platform)
     target_link_libraries(smoker_m12_tests PRIVATE smoker_platform Threads::Threads)
     target_link_libraries(smoker_m13_tests PRIVATE smoker_platform)
     target_link_libraries(smoker_m14_tests PRIVATE smoker_platform Threads::Threads)
     target_link_libraries(smoker_m15_tests PRIVATE smoker_platform Threads::Threads)
     target_compile_features(smoker_core_tests PRIVATE cxx_std_20)
     target_compile_features(smoker_v0_tests PRIVATE cxx_std_20)
+    target_compile_features(smoker_m7_tests PRIVATE cxx_std_20)
     target_compile_features(smoker_m12_tests PRIVATE cxx_std_20)
     target_compile_features(smoker_m13_tests PRIVATE cxx_std_20)
     target_compile_features(smoker_m14_tests PRIVATE cxx_std_20)
     target_compile_features(smoker_m15_tests PRIVATE cxx_std_20)
     set_target_properties(smoker_core_tests PROPERTIES CXX_EXTENSIONS OFF)
     set_target_properties(smoker_v0_tests PROPERTIES CXX_EXTENSIONS OFF)
+    set_target_properties(smoker_m7_tests PROPERTIES CXX_EXTENSIONS OFF)
     set_target_properties(smoker_m12_tests PROPERTIES CXX_EXTENSIONS OFF)
     set_target_properties(smoker_m13_tests PROPERTIES CXX_EXTENSIONS OFF)
     set_target_properties(smoker_m14_tests PROPERTIES CXX_EXTENSIONS OFF)
@@ -77,6 +84,16 @@ if(BUILD_TESTING)
             -fno-rtti
         )
         target_compile_options(smoker_v0_tests PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+            -Wconversion
+            -Wsign-conversion
+            -Werror
+            -fno-exceptions
+            -fno-rtti
+        )
+        target_compile_options(smoker_m7_tests PRIVATE
             -Wall
             -Wextra
             -Wpedantic
@@ -133,6 +150,7 @@ if(BUILD_TESTING)
     add_test(NAME smoker_v0.m3_session_timer COMMAND smoker_v0_tests m3)
     add_test(NAME smoker_v0.m4_safety COMMAND smoker_v0_tests m4)
     add_test(NAME smoker_v0.m5_complete_slice COMMAND smoker_v0_tests m5)
+    add_test(NAME smoker_v0.m7_max31865 COMMAND smoker_m7_tests)
     add_test(NAME smoker_v0.m12_transport COMMAND smoker_m12_tests)
     add_test(NAME smoker_v0.m13_ota_policy COMMAND smoker_m13_tests)
     add_test(NAME smoker_v0.m14_history COMMAND smoker_m14_tests)

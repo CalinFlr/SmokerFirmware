@@ -906,6 +906,191 @@ def check_m12_transport_contract(failures: CheckFailures) -> None:
     )
 
 
+def check_m7_max31865_contract(failures: CheckFailures) -> None:
+    platform = ROOT / "components/smoker_platform"
+    sensor_header = (
+        platform / "include/smoker/platform/max31865_sensor.hpp"
+    ).read_text()
+    target_header = (
+        platform / "include/smoker/platform/max31865_target_backend.hpp"
+    ).read_text()
+    sensor = (platform / "src/max31865_sensor.cpp").read_text()
+    target = (platform / "src/max31865_target_backend.cpp").read_text()
+    platform_cmake = (platform / "CMakeLists.txt").read_text()
+    runtime = (platform / "src/simulation_runtime.cpp").read_text()
+    main_source = (ROOT / "main/app_main.cpp").read_text()
+    tests = (ROOT / "tests/host/smoker_m7_tests.cpp").read_text()
+
+    lower_layer_text = "\n".join(
+        path.read_text()
+        for path in source_files("components/smoker_core", "components/smoker_app")
+    )
+    failures.require(
+        "max31865" not in lower_layer_text.lower()
+        and "driver/spi" not in lower_layer_text.lower()
+        and "driver/gpio" not in lower_layer_text.lower(),
+        "smoker_core/smoker_app must not contain MAX31865, SPI, or GPIO dependencies",
+    )
+
+    failures.require(
+        '"src/max31865_sensor.cpp"' in platform_cmake
+        and '"src/max31865_target_backend.cpp"' in platform_cmake
+        and platform_cmake.find('"src/max31865_target_backend.cpp"')
+            > platform_cmake.find("if(ESP_PLATFORM)"),
+        "the MAX31865 policy must be host-buildable and its real backend target-only",
+    )
+    sensor_read = source_section(
+        sensor,
+        "std::optional<core::Temperature> Max31865ChamberSensor::read()",
+        "bool Max31865ChamberSensor::configured()",
+    )
+    failures.require(
+        "class Max31865ChamberSensor final : public app::IChamberSensor"
+            in sensor_header
+        and "IMax31865Backend" in sensor_header
+        and "ConfiguredAwaitingFirstSample" in sensor_header
+        and "NotReady" in sensor_header
+        and bool(sensor_read)
+        and "result.status != Max31865ReadStatus::Valid" in sensor_read
+        and "std::isfinite(result.celsius)" in sensor_read
+        and "last" not in sensor_read.lower(),
+        "the MAX31865 chamber adapter must map only each current finite valid sample",
+    )
+    failures.require(
+        "reference_resistance_ohms;" in sensor_header
+        and "Max31865FilterFrequency filter;" in sensor_header
+        and "Max31865RtdStandard standard;" in sensor_header
+        and "spi_host_device_t spi_host;" in target_header
+        and "gpio_num_t chip_select_gpio;" in target_header
+        and "std::uint32_t clock_speed_hz;" in target_header,
+        "unknown MAX31865 hardware values must remain explicit required configuration",
+    )
+
+    for api in (
+        "max31865_init_desc(",
+        "max31865_set_config(",
+        "max31865_get_fault_status(",
+        "max31865_clear_fault_status(",
+        "max31865_read_temperature(",
+        "max31865_free_desc(",
+    ):
+        failures.require(api in target, f"the target MAX31865 backend must call {api}")
+    failures.require(
+        "MAX31865_MODE_AUTO" in target
+        and "MAX31865_3WIRE" in target
+        and "max31865_pt100_nominal_ohms" in target
+        and "~Max31865TargetBackend()" in target
+        and "release_descriptor();" in target,
+        "the inactive target backend must use provisional continuous PT100/3-wire RAII",
+    )
+
+    production_text = "\n".join(
+        path.read_text() for path in source_files("components", "main")
+    )
+    read_section = source_section(
+        target,
+        "Max31865ReadResult Max31865TargetBackend::read_continuous()",
+        "void Max31865TargetBackend::release_descriptor()",
+    )
+    failures.require(bool(read_section), "the target MAX31865 read boundary is missing")
+    readiness_check = read_section.find("if (!readiness_.sample_ready())")
+    first_fault_read = read_section.find("max31865_get_fault_status(")
+    temperature_read = read_section.find("max31865_read_temperature(")
+    failures.require(
+        readiness_check >= 0
+        and first_fault_read > readiness_check
+        and temperature_read > readiness_check,
+        "MAX31865 sample readiness must be checked before fault/temperature register reads",
+    )
+    configure_section = source_section(
+        target,
+        "bool Max31865TargetBackend::configure_device()",
+        "void Max31865TargetBackend::clear_fault_for_later_read()",
+    )
+    set_config = configure_section.find("max31865_set_config(")
+    readiness_reset = configure_section.find(
+        "readiness_.continuous_configuration_applied()"
+    )
+    failures.require(
+        bool(configure_section)
+        and "readiness_.invalidate()" in configure_section
+        and set_config >= 0
+        and readiness_reset > set_config,
+        "every successful continuous MAX31865 configuration must reset sample readiness",
+    )
+    initialize_section = source_section(
+        target,
+        "Max31865InitializationStatus Max31865TargetBackend::initialize()",
+        "Max31865ReadResult Max31865TargetBackend::read_continuous()",
+    )
+    failures.require(
+        "release_descriptor();" in initialize_section
+        and "if (configured_)" not in initialize_section,
+        "MAX31865 reinitialization must conservatively replace configuration and readiness",
+    )
+    recovery_section = source_section(
+        target,
+        "void Max31865TargetBackend::clear_fault_for_later_read()",
+        "bool Max31865TargetBackend::valid_configuration()",
+    )
+    recovery_invalidate = recovery_section.find("readiness_.invalidate()")
+    fault_clear = recovery_section.find("max31865_clear_fault_status(")
+    recovery_configure = recovery_section.find("configure_device()")
+    failures.require(
+        recovery_invalidate >= 0
+        and fault_clear > recovery_invalidate
+        and recovery_configure > fault_clear,
+        "MAX31865 fault recovery must invalidate readiness before clear/reconfiguration",
+    )
+    for forbidden in (
+        "max31865_measure(",
+        "vTaskDelay(",
+        "sleep(",
+        "delay(",
+        "new ",
+        "malloc(",
+        "calloc(",
+        "realloc(",
+        "make_unique",
+        "make_shared",
+        "xTaskCreate",
+    ):
+        failures.require(
+            forbidden not in target,
+            f"MAX31865 critical read must not contain {forbidden}",
+        )
+    failures.require(
+        "max31865_measure(" not in production_text,
+        "max31865_measure() must not enter project-owned production sources",
+    )
+    failures.require(
+        "xTaskCreate" not in sensor and "xTaskCreate" not in target,
+        "the MAX31865 adapter/backend must not create a task",
+    )
+    failures.require(
+        "SimulatedChamberSensor" in runtime
+        and "start_simulation_runtime" in main_source
+        and "Max31865TargetBackend" not in runtime
+        and "Max31865TargetBackend" not in main_source,
+        "production composition must remain on SimulatedChamberSensor",
+    )
+
+    for evidence in (
+        "test_max31865_configuration_policy_requires_explicit_valid_values",
+        "test_max31865_60_hz_first_conversion_boundary",
+        "test_max31865_50_hz_first_conversion_boundary",
+        "test_max31865_initialization_and_configuration_failures_are_absent",
+        "test_max31865_read_policy_never_reuses_a_previous_value",
+        "test_max31865_por_value_is_not_exposed_before_readiness",
+        "test_max31865_reconfiguration_resets_readiness_without_reuse",
+        "test_max31865_reinitialization_resets_readiness",
+        "test_max31865_fault_recovery_requires_fresh_current_value",
+        "test_max31865_read_is_observed_allocation_free",
+        "test_max31865_premature_application_tick_latches_fault_and_heater_off",
+    ):
+        failures.require(evidence in tests, f"M7 host evidence is missing: {evidence}")
+
+
 def check_m14_history_contract(failures: CheckFailures) -> None:
     runtime = (ROOT / "components/smoker_platform/src/simulation_runtime.cpp").read_text()
     history = (ROOT / "components/smoker_platform/src/history_service.cpp").read_text()
@@ -1247,6 +1432,7 @@ def main() -> int:
     check_v0_scope(failures)
     check_reproducible_build_contract(failures)
     check_m12_transport_contract(failures)
+    check_m7_max31865_contract(failures)
     check_m14_history_contract(failures)
     check_m15_blynk_contract(failures)
     return failures.finish()

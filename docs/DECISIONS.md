@@ -897,20 +897,43 @@ upstream ESP-IDF 6 driver-component compatibility change. This is preferred to
 copying register logic into the project or depending directly on an unversioned
 Git repository.
 
-Importing and cross-building the driver is M7 preparation, not a completed M6B
-physical record or a real-sensor implementation claim. The selected sensor is
-a three-wire PT100, fixing `rtd_nominal = 100.0F` and `MAX31865_3WIRE` for the
-future adapter. Production continues to compose `SimulatedChamberSensor` until
-the exact breakout revision, fitted reference resistor, supply/logic behavior,
-connector, SPI host, and GPIO assignment are documented and checked against
-`CTRL-001`.
+Importing, wrapping, and cross-building the driver is M7 software integration,
+not a completed M6B physical record or a real-sensor implementation claim. The
+selected sensor is a three-wire PT100, fixing `rtd_nominal = 100.0F` and
+`MAX31865_3WIRE` for the inactive adapter. Production continues to compose `SimulatedChamberSensor`
+until the exact breakout revision, fitted reference resistor, supply/logic
+behavior, connector, SPI host, and GPIO assignment are documented and checked
+against `CTRL-001`.
 
-The future implementation remains a `smoker_platform` adapter behind the
-existing application-owned `IChamberSensor` port. It creates no task and does
-not expose ESP-IDF or driver types to `smoker_app` or `smoker_core`. The
-component's `max31865_measure()` convenience function waits 70 ms and must not
-be called directly from the critical cycle. M7 will select and hardware-test
-either bounded continuous reads or a staged non-blocking single-shot sequence.
+The implementation remains a `smoker_platform` adapter behind the existing
+application-owned `IChamberSensor` port. A platform-neutral seam is host tested;
+the target-only RAII backend acquires/configures/releases the real descriptor
+with `max31865_init_desc()`, `max31865_set_config()`, and
+`max31865_free_desc()`, and reads through `max31865_get_fault_status()` plus
+`max31865_read_temperature()`. A detected fault uses
+`max31865_clear_fault_status()` and reconfiguration only to permit a fresh
+later-cycle read; it remains absent for the current cycle. It creates no task
+and exposes no ESP-IDF or driver types to `smoker_app` or `smoker_core`. The
+component's `max31865_measure()` convenience function waits 70 ms and is
+forbidden from the critical cycle.
+
+Descriptor/configuration success is not sample readiness. The RTD data-register
+POR value is zero, and driver 1.0.8 converts raw zero to a finite value near
+-242.02 C. A host-tested monotonic policy therefore blocks fault/temperature
+register reads until the official maximum first-conversion interval has elapsed
+after every successful automatic configuration: 55 ms with the 60 Hz notch or
+66 ms with the 50 Hz notch. It returns explicit `NotReady`, which the chamber
+adapter maps to absence. Fault clear/reconfiguration invalidates freshness and
+restarts the same boundary; no previous reading is reused.
+
+Continuous conversion with bias is the provisional inactive strategy.
+Project-owned read code contains no explicit delay, task creation, heap
+allocation, or `max31865_measure()` call. Host allocation observation and source
+inspection do not prove allocation behavior inside ESP-IDF/driver/SPI code or a
+real worst-case SPI blocking time. Filter, RTD standard, reference resistance,
+SPI host, CS GPIO, and SPI clock have no fabricated defaults. Bus ownership and
+timing, module/input-network and bias settling, fault recovery, accuracy, wiring,
+and physical validity remain hardware-pending and may require a later decision.
 
 Every SPI/conversion error, MAX31865 fault, non-finite value, or value rejected
 by the documented M7 validity policy becomes an absent authoritative

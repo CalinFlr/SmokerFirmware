@@ -3,9 +3,11 @@
 Status: **M15 software is host/sanitizer and ESP-IDF cross-build validated;
 Blynk Console is configured and KFB003 provisioning, live TLS/status/commands,
 reboot no-replay, firmware check, and remote-error e-mail delivery passed;
-phone push receipt, native mobile layout, exact broker timing, deliberate
-transport loss, the M14 Wi-Fi-loss scenario, M12 radio edge cases, and
-external-hardware safety remain pending**
+the inactive M7 MAX31865 adapter is host-tested and API cross-built while
+production remains simulated; phone push receipt, native mobile layout, exact
+broker timing, deliberate transport loss, the M14 Wi-Fi-loss scenario, M12
+radio edge cases, and all external-sensor/hardware safety evidence remain
+pending**
 
 This matrix separates implementation status from validation strength. A rule is
 not considered target- or hardware-validated merely because host tests or an
@@ -26,10 +28,10 @@ ESP-IDF cross-build pass.
   not claim implementation.
 
 Test names below refer to functions in `tests/host/smoker_core_tests.cpp`,
-`tests/host/smoker_v0_tests.cpp`, `tests/host/smoker_m12_tests.cpp`, and
-`tests/host/smoker_m13_tests.cpp`, `tests/host/smoker_m14_tests.cpp`, and
-`tests/host/smoker_m15_tests.cpp`. All host test groups are registered in
-`tests/CMakeLists.txt`.
+`tests/host/smoker_v0_tests.cpp`, `tests/host/smoker_m7_tests.cpp`,
+`tests/host/smoker_m12_tests.cpp`, `tests/host/smoker_m13_tests.cpp`,
+`tests/host/smoker_m14_tests.cpp`, and `tests/host/smoker_m15_tests.cpp`. All
+host test groups are registered in `tests/CMakeLists.txt`.
 
 ## Business rules
 
@@ -119,7 +121,7 @@ Test names below refer to functions in `tests/host/smoker_core_tests.cpp`,
 | Rule | Milestone/status | Implementation evidence | Test/evidence | Validation |
 |---|---|---|---|---|
 | SF-001 | M4 implemented/P0 guarded | safety evaluated synchronously before sole final heater write | `test_m4_invalid_and_latched_fault`, `test_p0_cr_005_heating_state_invariants`; `tools/check_architecture.py` write-path check | H-pass, B-pass; T-pending |
-| SF-002 | M4 implemented for simulated source/M7 dependency selected | absent authoritative reading raises ChamberSensorInvalid with no last-known fallback; exact-pinned `esp-idf-lib/max31865` 1.0.8 is available to the future platform adapter but production still uses simulation | `test_m4_invalid_and_latched_fault`; ESP-IDF component cross-build | H-pass, B-pass component; real fault/read policy Deferred M7 and HW-pending |
+| SF-002 | M4 implemented; M7 adapter implemented/inactive | absent authoritative reading raises ChamberSensorInvalid with no last-known fallback; the exact-pinned backend maps configured-but-not-ready, driver/fault, and non-finite outcomes to absence while production still uses simulation | `test_m4_invalid_and_latched_fault`, `test_max31865_initialization_and_configuration_failures_are_absent`, `test_max31865_read_policy_never_reuses_a_previous_value`, `test_max31865_premature_application_tick_latches_fault_and_heater_off`; ESP-IDF API cross-build | H-pass, B-pass API compatibility, Guardrail; real timing and physical faults HW-pending M6B/M7 |
 | SF-003 | M4 implemented for configured simulation limit | safety evaluation faults above maximum; target validation rejects above it | `test_m4_over_temperature_and_limits` | H-pass, B-pass; physical value HW-pending |
 | SF-004 | M0/M4 partial | constructor writes OFF; config/sensor/safety validated before final demand | `test_m2`, M4 tests, config-invalid M5 test | H-pass, B-pass; reset reason/recovery Deferred M10 |
 | SF-005 | M5 configured/M6A target-validated | platform runtime subscribes/resets TWDT; defaults set 5 s and panic/reset | target diagnostic deliberately stalled `ControlTask` for 7 s; TWDT identified the task, panicked/reset, and next boot reported watchdog reset reason; normal image restored | B-pass, T-pass |
@@ -145,6 +147,22 @@ download, two-slot boot, mark-valid, forced rollback, and final reinstall.
 | OTA-004 | M13 implemented | exact custom table has `otadata` and equal `ota_0`/`ota_1` 3 MiB slots within confirmed 16 MiB flash; rollback config enabled; signed serial preflight rejects stale configuration, unsigned/build-mismatched apps, and mismatched generated layouts; ordinary unsigned/partial ESP-IDF flash targets fail closed | `test_update_coordinator`; `tools/check_effective_sdkconfig.py`, `tools/flash_signed_firmware.py --check-only`, `tools/check_partitions.py`, blocked ESP-IDF flash-target validation, ESP-IDF partition output; signed KFB003 USB migration, `ota_0` to `ota_1` install, forced rollback, and final reinstall | H-pass, B-pass, Guardrail; T-pass USB migration and both-slot rollback path |
 | OTA-005 | M13 implemented | `PENDING_VERIFY` blocks Start; five safe TWDT-reset cycles mark valid; fault/10 s/mark error or runtime-context/ControlTask/OtaTask bootstrap failure invokes rollback reboot | `test_application_update_permission`; `tools/check_architecture.py` pending-bootstrap source guardrail; forced pending-image reset and clean reinstall on KFB003 | H-pass, B-pass, Guardrail; T-pass rollback and five-cycle mark-valid |
 | OTA-006 | M13 implemented | static low-priority core-0 OtaTask owns bounded SNTP/HTTPS/flash operations and is outside TWDT; its stack/TCB are internal-DRAM objects, not part of the PSRAM-eligible heap service; ControlTask exchanges ordered bounded atomic signals/snapshots only; unavailable worker reports `FAILED` and rejects work | `test_image_metadata_and_deadlines`, `test_update_coordinator`; `tools/check_architecture.py` task-placement/order/availability checks; live check/install on KFB003 | H-pass, B-pass, Guardrail; T-pass normal install; T-pending Wi-Fi-loss install |
+
+## Inactive M7 MAX31865 software-integration contracts
+
+These checks cover a platform software boundary and ESP-IDF 6.0.2 source/API
+compatibility only. M6B and M7 are not complete, and no row is physical sensor
+or electrical evidence.
+
+| Contract | Implementation evidence | Test/evidence | Validation |
+|---|---|---|---|
+| required hardware values are not invented | reference resistance, filter, RTD standard, SPI host, CS GPIO, and SPI clock are required configuration without defaults; PT100 nominal 100 ohm and three-wire are the only fixed confirmed choices | `test_max31865_configuration_policy_requires_explicit_valid_values`; source guardrail | H-pass, B-pass, Guardrail; physical values HW-pending |
+| first-conversion freshness is explicit | configuration reports `ConfiguredAwaitingFirstSample`; a fake-clock-tested policy blocks before 55 ms at 60 Hz and 66 ms at 50 Hz, accepts exactly at each boundary, and resets after successful configuration, reinitialization, and fault recovery | `test_max31865_60_hz_first_conversion_boundary`, `test_max31865_50_hz_first_conversion_boundary`, `test_max31865_reconfiguration_resets_readiness_without_reuse`, `test_max31865_reinitialization_resets_readiness`, `test_max31865_fault_recovery_requires_fresh_current_value`; source ordering guardrail | H-pass, B-pass, Guardrail; module settling and target timing HW-pending |
+| POR/stale values cannot cross an early read | explicit `NotReady` maps to absence; target readiness is checked before fault/temperature reads; repeated early reads neither touch emulated registers nor reuse a prior sample | `test_max31865_por_value_is_not_exposed_before_readiness`, `test_max31865_reconfiguration_resets_readiness_without_reuse` | H-pass, B-pass, Guardrail |
+| every current result maps independently | adapter returns `Temperature` only for a current finite valid backend result; initialization/configuration/read/fault failures are absent and no last value is stored | `test_max31865_initialization_and_configuration_failures_are_absent`, `test_max31865_read_policy_never_reuses_a_previous_value` | H-pass, B-pass |
+| existing safety remains authoritative | an early/absent adapter reading raises and latches `ChamberSensorInvalid`, commands heater OFF, and a later fresh reading does not resume heating automatically | `test_max31865_premature_application_tick_latches_fault_and_heater_off` | H-pass, B-pass; real fault injection HW-pending |
+| project-owned read code has no explicit wait/allocation | common and target read code contains no explicit delay, task creation, heap allocation, or `max31865_measure()` call | `test_max31865_read_is_observed_allocation_free`; `tools/check_architecture.py` | H-pass ordinary-C++ allocation observation, Guardrail; ESP-IDF/driver allocation and real SPI worst-case blocking unproven |
+| pinned API is exercised but inactive | target-only RAII backend uses the tested readiness policy before descriptor fault/temperature APIs in provisional continuous mode; `main`/runtime still compose `SimulatedChamberSensor` and contain no concrete SPI bus/GPIO | target compilation and architecture guardrail | B-pass API compatibility, Guardrail; bus ownership/timing and physical validation HW-pending |
 
 ## M5 command/runtime contracts added by review remediation
 
