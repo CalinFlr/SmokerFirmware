@@ -1,3 +1,18 @@
+Historical status note
+
+This plan records the earlier dependency-import checkpoint. Its blanket
+adapter-development gate was refined by
+`.agent/M7_MAX31865_SOFTWARE_INTEGRATION_PLAN.md` on 2026-08-21: inactive
+adapter development and cross-build evidence are now allowed, while production
+activation, bus/pin configuration, wiring, and hardware validation remain
+gated by the missing M6B facts.
+
+The 2026-08-21 freshness audit further requires the inactive target backend to
+distinguish descriptor/configuration success from sample readiness. The
+software-integration plan now records the nonblocking, filter-dependent
+first-conversion boundary and post-reconfiguration reset work; this historical
+dependency-import checkpoint does not supersede it.
+
 Goal
 
 Select and import a maintained MAX31865 ESP-IDF driver without rewriting the
@@ -33,8 +48,8 @@ Current repository observations
   licensing.
 - the selected component's blocking 70 ms `max31865_measure()` convenience API
   is unsuitable for direct use by the final critical-cycle adapter; M7 will
-  choose between continuous bounded reads and a staged non-blocking single-shot
-  sequence after the physical frontend is documented.
+  use a nonblocking filter-dependent readiness boundary around provisional
+  continuous reads, subject to physical frontend evidence.
 
 Assumptions
 
@@ -79,6 +94,10 @@ Completion result
 - D056 and the hardware/roadmap/traceability records preserve the physical M6B
   gate and fail-OFF M7 policy.
 - production remains on `SimulatedChamberSensor`; the unresolved physical
-  facts above are required before implementing and activating the adapter.
+  facts above are required before activating the adapter.
 - PT100 with three leads is now confirmed, fixing the future driver fields to
   `rtd_nominal = 100.0F` and `MAX31865_3WIRE`.
+- The subsequent freshness remediation adds the official 55 ms/66 ms monotonic
+  first-conversion boundary before any register read and after every successful
+  continuous reconfiguration. It is host/sanitizer and target-cross-build
+  evidence only; additional physical settling and SPI timing remain pending.

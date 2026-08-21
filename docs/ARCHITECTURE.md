@@ -74,7 +74,7 @@ Do not create ports before a milestone needs them.
 
 ESP-IDF/hardware-specific implementations.
 
-Current M15 implementations:
+Current M15 plus inactive M7 software implementations:
 
 - simulated chamber/probe sources;
 - simulated heater output;
@@ -95,12 +95,12 @@ Current M15 implementations:
 - a platform-only Blynk Device MQTT/TLS adapter, two bounded command mailboxes,
   shared atomic external IDs, UART0/NVS credential provisioning, and one static
   low-priority core-0 `BlynkTask`. Remote loss cannot enter control or safety.
+- an inactive MAX31865 chamber-sensor adapter behind `IChamberSensor`, with a
+  host-testable result/configuration policy and a target-only RAII backend over
+  the pinned 1.0.8 API. Production composition remains simulated.
 
 Future examples:
 
-- MAX31865-based chamber source. The exact-pinned registry driver is present,
-  but its `smoker_platform` adapter and runtime activation remain gated on the
-  physical M6B chamber record;
 - M8 `espressif/pid_ctrl` adapter behind an application-owned control port;
 - dual-ADS1115 food-probe acquisition. The exact-pinned registry driver is
   present, but its `smoker_platform` adapter and runtime activation remain
@@ -140,6 +140,37 @@ Business rules do not belong in `app_main.cpp`.
 
 At M15, `app_main` composes the built-in simulation configuration and delegates
 task/runtime mechanics to `smoker_platform`.
+
+### Inactive M7 MAX31865 boundary
+
+The M7 software boundary does not change production composition. A
+platform-neutral `IMax31865Backend` seam and monotonic readiness policy let
+host tests prove that configured-but-not-ready, read/fault, and non-finite
+outcomes become an absent chamber reading, with no last-value reuse. The
+target-only backend requires explicit SPI host, CS GPIO, SPI clock, monotonic
+clock, fitted reference resistance, filter, and RTD standard; it supplies no
+fabricated defaults. PT100 nominal 100 ohm and three-wire are the only fixed
+physical choices currently supported by the adapter.
+
+Initialization acquires the real 1.0.8 descriptor and configures bias plus
+`MAX31865_MODE_AUTO`, but reports `ConfiguredAwaitingFirstSample`, not sample
+readiness. The MAX31865 RTD registers reset to zero, which driver 1.0.8 can
+convert successfully to about -242.02 C. The backend therefore arms a
+monotonic boundary after every successful continuous configuration and returns
+explicit `NotReady` before the official maximum first-conversion interval:
+55 ms for the 60 Hz notch or 66 ms for the 50 Hz notch. At and after that
+boundary it may call `max31865_get_fault_status()` and
+`max31865_read_temperature()`. Fault clear/reconfiguration resets the boundary;
+the faulting and intervening readings remain absent.
+
+Project-owned `read()`/`read_continuous()` code contains no explicit delay,
+task creation, heap allocation, or `max31865_measure()` call. Host allocation
+observation and source inspection do not prove that ESP-IDF/driver/SPI internals
+are allocation-free or that real SPI transactions have a bounded worst-case
+latency. Continuous conversion is provisional. SPI-bus ownership and timing,
+module/input-network and bias settling, wiring, accuracy, noise, fault recovery,
+and sustained physical behavior remain gated on M6B facts and connected M7
+tests.
 
 ## Runtime-state ownership
 

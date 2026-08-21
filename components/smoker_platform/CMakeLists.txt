@@ -6,6 +6,7 @@ set(smoker_platform_sources
     "src/firmware_update_support.cpp"
     "src/history_support.cpp"
     "src/local_network_support.cpp"
+    "src/max31865_sensor.cpp"
     "src/runtime_transport_support.cpp"
     "src/simulated_adapters.cpp"
     "src/wall_clock.cpp"
@@ -17,6 +18,7 @@ if(ESP_PLATFORM)
         "src/firmware_update_service.cpp"
         "src/history_service.cpp"
         "src/local_connectivity.cpp"
+        "src/max31865_target_backend.cpp"
         "src/simulation_runtime.cpp"
     )
     idf_component_register(

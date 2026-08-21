@@ -19,10 +19,12 @@ A future item is **not permission to implement it early**.
   remaining PT100 and probe-frontend facts, address straps, connectors, GPIOs,
   and connected validation remain open. SSR, power, and independent-protection
   hardware are still blocked on exact parts.
-- **M6B and M7-M10 — remaining controller product baseline:** future. Product V0
-  cannot be called complete before real sensing/output, food probes,
-  persistence, and recovery are implemented and validated at their appropriate
-  levels.
+- **M6B and M7-M10 — remaining controller product baseline:** incomplete. M7
+  now has an inactive host-tested/cross-buildable MAX31865 software boundary,
+  but production remains simulated and its physical activation is still gated
+  by M6B. Product V0 cannot be called complete before real sensing/output, food
+  probes, persistence, and recovery are implemented and validated at their
+  appropriate levels.
 - **M11 — local display:** postponed because no display has been purchased.
 - **M12 — Wi-Fi + local API/UI:** implemented for the simulated controller and
   host/cross-build validated; physical radio/provisioning/runtime validation on
@@ -193,8 +195,10 @@ Status: **In progress — MAX31865/three-wire PT100 and two ADS1115 converters
 selected; physical modules, complete electrical frontends, and the remaining
 external hardware are still incomplete.**
 
-Do not implement a real external adapter until its actual component/interface
-is available and documented.
+Inactive adapter software may be implemented when unknown physical values stay
+mandatory configuration and production composition remains simulated. Do not
+activate a real external adapter, initialize its concrete bus, or assign pins
+until the actual component/interface is available and documented.
 
 Confirm and document:
 
@@ -213,20 +217,29 @@ checklist is resolved.
 
 ## M7 — Real authoritative chamber sensor
 
-Status: **Preparation started — exact MAX31865 driver imported; adapter, wiring,
-and connected-sensor validation are blocked on the remaining M6B chamber
-facts.**
+Status: **Software adapter implemented but inactive — host behavior and ESP-IDF
+6.0.2 API compatibility are validated; runtime activation, wiring, and all
+connected-sensor evidence remain blocked on the remaining M6B chamber facts.**
 
-Replace simulated chamber source with real hardware adapter.
+Eventually replace the simulated chamber source with the real hardware adapter.
 
 Keep simulated adapter for development/testing.
 
 Use the exact-pinned ESP Component Registry dependency
 `esp-idf-lib/max31865` 1.0.8 rather than rewriting the register protocol. Its
-70 ms `max31865_measure()` convenience call must not be used directly inside
-the critical cycle. After the physical module is documented, choose either
-continuous conversion with bounded reads or an explicit non-blocking
-single-shot sequence, and validate the choice on hardware.
+70 ms `max31865_measure()` convenience call is forbidden inside the critical
+cycle. The inactive backend provisionally configures continuous conversion and
+distinguishes descriptor/configuration success from sample readiness. Its
+host-tested monotonic policy returns absence and performs no fault/temperature
+register read before the official maximum first-conversion interval: 55 ms for
+60 Hz or 66 ms for 50 Hz. Every successful configuration, including recovery
+after fault clear, resets this boundary.
+
+Project-owned read code contains no explicit delay, task creation, heap
+allocation, or `max31865_measure()` call. This source/host evidence does not
+prove ESP-IDF/driver/SPI allocation behavior or bound real SPI worst-case
+blocking. Bus ownership/timing and any additional module/input-network or bias
+settling remain connected-hardware gates.
 
 The confirmed RTD configuration is PT100 with three leads, corresponding to
 driver nominal resistance `100.0F` and `MAX31865_3WIRE`. The fitted module
@@ -237,6 +250,15 @@ The project adapter maps every SPI, conversion, non-finite, and MAX31865 fault
 to an absent authoritative measurement; existing safety then latches
 `ChamberSensorInvalid` and commands heater OFF. No last-known-value fallback is
 allowed.
+
+The adapter requires explicit SPI host, CS GPIO, SPI clock, fitted reference
+resistance, filter, and RTD standard. Production still composes
+`SimulatedChamberSensor`; no bus or GPIO value is present in the production
+composition.
+
+M7 remains incomplete until the chamber portion of M6B is recorded and the
+physical sensor, wiring, conversion timing, accuracy, noise, open/short faults,
+recovery, and sustained operation are validated on the target.
 
 Requires the chamber-sensor/frontend portion of M6B.
 

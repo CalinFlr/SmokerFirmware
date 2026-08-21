@@ -2,7 +2,7 @@
 
 Status: **M6A complete; M6B external hardware incomplete**
 
-Last evidence update: **2026-08-18**
+Last evidence update: **2026-08-21**
 
 This file is the canonical inventory for every physical component used by the
 product. It is written so that a human or an AI agent can distinguish an
@@ -77,7 +77,7 @@ before either gate is marked complete.
 | ID | Product role | Selected component | Current classification | Integration status |
 |---|---|---|---|---|
 | `CTRL-001` | Main controller | SuooTci `KFB003` / eMAG `D1T7M22BM`; N16R8 variant reported | Carrier identity **CONFIRMED FROM DOCUMENTATION**; SoC/storage/USB **CONFIRMED FROM HARDWARE** | M6A complete; simulated I/O only |
-| `CHAMBER-001` | Authoritative chamber sensor/frontend | MAX31865 with PT100, three-wire; exact physical module and remaining RTD facts pending | Converter/RTD/wire choices **CONFIRMED FROM DOCUMENTATION** — user selection; module/electrical facts **UNCONFIRMED** | Registry driver imported; adapter/wiring blocked at M6B/M7 |
+| `CHAMBER-001` | Authoritative chamber sensor/frontend | MAX31865 with PT100, three-wire; exact physical module and remaining RTD facts pending | Converter/RTD/wire choices **CONFIRMED FROM DOCUMENTATION** — user selection; module/electrical facts **UNCONFIRMED** | Software adapter implemented/inactive; production, wiring, and hardware validation blocked at M6B/M7 |
 | `PROBES-001` | Food-probe analog acquisition | Two ADS1115 converters selected; complete probe frontend and channel map pending | Converter quantity/type **CONFIRMED FROM DOCUMENTATION** — user selection; modules/electrical design **UNCONFIRMED** | Registry driver imported; adapter/wiring blocked at M6B/M9 |
 | `HEATER-001` | SSR/heater power interface | Not selected | **UNCONFIRMED** | Blocked at M6B; no GPIO assigned |
 | `SAFETY-001` | Independent thermal/electrical cutoff | Not designed | **UNCONFIRMED** | Required at M6B |
@@ -100,8 +100,11 @@ Until each board/component fact is confirmed:
 - do not implement fan control;
 - do not implement smoke-generator control.
 
-Use simulated sensor/probe/heater adapters until the corresponding M6B hardware
-is confirmed. M6A may exercise only the controller board and its integrated
+Production must use simulated sensor/probe/heater adapters until the
+corresponding M6B hardware is confirmed. An inactive external-adapter software
+boundary may be host-tested and cross-built when every unknown hardware value
+remains required configuration and no bus, pin, or runtime activation is
+invented. M6A may exercise only the controller board and its integrated
 capabilities; this does not validate external control hardware.
 
 ## `CHAMBER-001` — MAX31865 chamber-frontend dossier
@@ -125,17 +128,40 @@ Component Registry:
 | Registry identity | component hash `c7a027843a3f9cf4b06e7e216b25b2089115568f288c8682defd84c018a5b80f` | **CONFIRMED FROM CONFIG** — `dependencies.lock` |
 | Upstream source | release commit `79566bd59420b03ab999c124f012a93a63f3a7db`; supports `esp32s3`; release includes the ESP-IDF 6 driver split | **CONFIRMED FROM DOCUMENTATION** — registry metadata and upstream release history |
 | Driver capabilities | SPI descriptor/configuration, PT100/PT1000 nominal values, 2/3/4-wire configuration, 50/60 Hz filter selection, raw/temperature reads, and MAX31865 fault access | **CONFIRMED FROM DOCUMENTATION** — versioned public header/source |
-| Current firmware use | dependency is compiled but production still composes `SimulatedChamberSensor` | **CONFIRMED FROM CONFIG** |
+| Conversion freshness | RTD MSB/LSB POR is `0x00`; maximum first conversion after enabling automatic conversion is 55 ms at 60 Hz and 66 ms at 50 Hz | **CONFIRMED FROM DOCUMENTATION** — Analog Devices MAX31865 datasheet |
+| Raw-zero driver behavior | 1.0.8 shifts raw zero to zero resistance and its below-zero polynomial returns approximately -242.02 C with `ESP_OK` when the raw fault bit is clear | **CONFIRMED FROM DOCUMENTATION** — versioned driver source |
+| Current firmware use | inactive adapter and real API backend compile; production still composes `SimulatedChamberSensor` | **CONFIRMED FROM CONFIG** — host tests and ESP-IDF 6.0.2 cross-build only |
 
-The future M7 adapter remains in `smoker_platform` behind the existing
-`IChamberSensor` port. It will not create a sensor task. The component's
-`max31865_measure()` helper contains a 70 ms task delay and is not approved for
-direct use in the critical cycle. M7 must instead validate a bounded continuous
-read or a non-blocking staged single-shot design. Any driver error, reported
-fault, or invalid/non-finite result becomes an absent authoritative reading;
-the existing synchronous safety path then latches fault and forces heater OFF.
+The inactive M7 adapter is implemented in `smoker_platform` behind the existing
+`IChamberSensor` port and creates no sensor task. A host-safe seam owns only
+project result/configuration types; the target-only RAII backend calls the real
+1.0.8 `max31865_init_desc()`, `max31865_set_config()`,
+`max31865_get_fault_status()`, `max31865_read_temperature()`,
+`max31865_clear_fault_status()`, and `max31865_free_desc()` APIs. It
+provisionally selects continuous conversion with bias. Configuration success is
+reported separately from sample readiness. A host-tested monotonic policy
+prevents all fault/temperature register reads before 55 ms at 60 Hz or 66 ms at
+50 Hz, including after fault clear/reconfiguration. Early reads return explicit
+`NotReady` and map to absence. The driver's `max31865_measure()` remains
+forbidden because it contains a 70 ms task delay.
 
-### Physical facts still required before the adapter or pin assignment
+The project-owned read path contains no explicit delay, task creation, or heap
+allocation. That source fact and ordinary-C++ host allocation observation do
+not prove ESP-IDF/driver/SPI allocation behavior or real SPI worst-case blocking.
+The datasheet conversion interval also does not determine module-specific
+input-network/bias settling; that requirement stays pending until the physical
+module and frontend are known.
+
+Reference resistance, filter, RTD standard, SPI host, CS GPIO, and SPI clock
+are explicit required configuration with no project defaults. PT100 nominal
+100 ohm and three-wire are fixed from the confirmed user selection. Any
+descriptor/configuration/SPI/conversion error, reported fault, or
+invalid/non-finite result becomes an absent authoritative reading without
+last-value reuse; the existing synchronous safety path then latches fault and
+forces heater OFF. This is host behavior plus target API cross-build evidence,
+not a physically validated conversion policy.
+
+### Physical facts still required before runtime activation or pin assignment
 
 | Item | Current finding | Classification |
 |---|---|---|
@@ -148,6 +174,7 @@ the existing synchronous safety path then latches fault and forces heater OFF.
 | SPI and connector pinout | Not recorded | **UNCONFIRMED** |
 | ESP32-S3 GPIO assignment | None; must be checked against `CTRL-001` restrictions | **UNCONFIRMED** |
 | Boot-state behavior and safe power sequencing | Not tested | **UNCONFIRMED** |
+| Bias/input-network settling | Module-specific RC/input network is unknown; no extra settling interval has been selected or tested | **UNCONFIRMED** |
 | Accuracy/noise/fault behavior | No connected open/short, ambient, reference-temperature, sustained-run, or heater-noise test | **UNCONFIRMED** |
 
 Primary software references:
