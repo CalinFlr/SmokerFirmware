@@ -4,10 +4,11 @@ Status: **M15 software is host/sanitizer and ESP-IDF cross-build validated;
 Blynk Console is configured and KFB003 provisioning, live TLS/status/commands,
 reboot no-replay, firmware check, and remote-error e-mail delivery passed;
 the inactive M7 MAX31865 adapter is host-tested and API cross-built while
-production remains simulated; phone push receipt, native mobile layout, exact
-broker timing, deliberate transport loss, the M14 Wi-Fi-loss scenario, M12
-radio edge cases, and all external-sensor/hardware safety evidence remain
-pending**
+production remains simulated; the inactive M9 dual-ADS1115 sequencer is
+host-tested and API cross-built while production probe acquisition also remains
+simulated; phone push receipt, native mobile layout, exact broker timing,
+deliberate transport loss, the M14 Wi-Fi-loss scenario, M12 radio edge cases,
+and all external-sensor/hardware safety evidence remain pending**
 
 This matrix separates implementation status from validation strength. A rule is
 not considered target- or hardware-validated merely because host tests or an
@@ -29,7 +30,8 @@ ESP-IDF cross-build pass.
 
 Test names below refer to functions in `tests/host/smoker_core_tests.cpp`,
 `tests/host/smoker_v0_tests.cpp`, `tests/host/smoker_m7_tests.cpp`,
-`tests/host/smoker_m12_tests.cpp`, `tests/host/smoker_m13_tests.cpp`,
+`tests/host/smoker_m9_tests.cpp`, `tests/host/smoker_m12_tests.cpp`,
+`tests/host/smoker_m13_tests.cpp`,
 `tests/host/smoker_m14_tests.cpp`, and `tests/host/smoker_m15_tests.cpp`. All
 host test groups are registered in `tests/CMakeLists.txt`.
 
@@ -40,7 +42,7 @@ host test groups are registered in `tests/CMakeLists.txt`.
 | BR-001 | M3 implemented | `SmokerApplication::process(StartSessionCommand)` rejects Start while running | `test_m3_session_and_snapshot` | H-pass, B-pass |
 | BR-002 | M1/M5 implemented | separate chamber state and `ProbeRuntime`/`ProbeSnapshot` types | `test_m5_complete_slice` | H-pass, B-pass |
 | BR-003 | M2 implemented | single `IChamberSensor` input used by control and safety | `test_m2`, `test_m4_invalid_and_latched_fault` | H-pass, B-pass |
-| BR-004 | M5 implemented/M9 dependency selected | probe configuration is a vector; non-empty/unique IDs are validated; exact-pinned dual-ADS1115 driver is available for the future platform adapter, while physical channel capacity remains M6B/M9 evidence | `test_m5_complete_slice`, `test_m5_validation_queue_and_combined_order`; ESP-IDF component cross-build | H-pass, B-pass component; real capacity HW-pending M6B/M9 |
+| BR-004 | M5 implemented/M9 adapter inactive | probe configuration remains a vector; the inactive exact-pinned dual-ADS1115 sequencer validates two device records and unique logical mappings without creating a core capacity constant; physical usable capacity remains M6B/M9 evidence | `test_m5_complete_slice`, `test_m5_validation_queue_and_combined_order`, `test_ads1115_invalid_incomplete_configurations_are_rejected`; ESP-IDF API cross-build | H-pass, B-pass inactive adapter; real capacity HW-pending M6B/M9 |
 | BR-005 | M5 implemented | `calculate_heater_demand()` accepts only chamber current/target; probe logic emits alarms only | `test_m5_complete_slice` | H-pass, B-pass |
 | BR-006 | M5 implemented | `ProbeSnapshot` exposes all required properties | `test_m5_complete_slice` | H-pass, B-pass |
 | BR-007 | M5 implemented/clarified | `evaluate_probe_state()` gates target alarms on RUNNING, enabled, alarm-enabled, and one latch per target/session | `test_m5_complete_slice`, `test_m5_same_cycle_command_semantics`, `test_m5_alarm_lifecycle_and_probe_defaults` | H-pass, B-pass |
@@ -127,7 +129,7 @@ host test groups are registered in `tests/CMakeLists.txt`.
 | SF-005 | M5 configured/M6A target-validated | platform runtime subscribes/resets TWDT; defaults set 5 s and panic/reset | target diagnostic deliberately stalled `ControlTask` for 7 s; TWDT identified the task, panicked/reset, and next boot reported watchdog reset reason; normal image restored | B-pass, T-pass |
 | SF-006 | M10 | reset reason and recovery policy are absent by design | roadmap/absence review | Deferred M10 |
 | SF-007 | M4 implemented | fault persists after signal recovery; clear requires resolved condition and leaves session stopped | `test_m4_invalid_and_latched_fault` | H-pass, B-pass |
-| SF-008 | M5 implemented | food probe disconnect creates alarm only and does not change heater/fault | `test_m5_complete_slice`, `test_m5_alarm_lifecycle_and_probe_defaults` | H-pass, B-pass |
+| SF-008 | M5 implemented/M9 adapter inactive | food probe disconnect/invalid input creates absence/alarm only; per-probe ADS1115 failures clear only that cache and do not change chamber fault or heater demand | `test_m5_complete_slice`, `test_m5_alarm_lifecycle_and_probe_defaults`, `test_ads1115_per_probe_failures_clear_only_the_affected_sample`, `test_ads1115_missing_or_invalid_food_probe_never_changes_chamber_control` | H-pass, B-pass inactive adapter |
 | SF-009 | M12 implemented/target pending | HTTP uses bounded mailbox/snapshot transports; only ControlTask submits and connectivity failure does not gate its creation | `test_mailbox_concurrency`, `test_snapshot_exchange_concurrency`; architecture review | H-pass, B-pass; T-pending Wi-Fi-loss run |
 | SF-010 | M4 implemented/P0 guarded | only `SmokerApplication` writes heater; every tick output passes `apply_safety_gate()` | `test_p0_sr_003_manual_stop_is_off_barrier`, `test_p0_cr_005_heating_state_invariants`; `tools/check_architecture.py` write-path check | H-pass, B-pass; T-pending |
 | SF-011 | M6B external-hardware gate | explicitly no external safety-hardware implementation/claim | `docs/HARDWARE.md` M6B checklist | HW-pending M6B |
@@ -163,6 +165,24 @@ or electrical evidence.
 | existing safety remains authoritative | an early/absent adapter reading raises and latches `ChamberSensorInvalid`, commands heater OFF, and a later fresh reading does not resume heating automatically | `test_max31865_premature_application_tick_latches_fault_and_heater_off` | H-pass, B-pass; real fault injection HW-pending |
 | project-owned read code has no explicit wait/allocation | common and target read code contains no explicit delay, task creation, heap allocation, or `max31865_measure()` call | `test_max31865_read_is_observed_allocation_free`; `tools/check_architecture.py` | H-pass ordinary-C++ allocation observation, Guardrail; ESP-IDF/driver allocation and real SPI worst-case blocking unproven |
 | pinned API is exercised but inactive | target-only RAII backend uses the tested readiness policy before descriptor fault/temperature APIs in provisional continuous mode; `main`/runtime still compose `SimulatedChamberSensor` and contain no concrete SPI bus/GPIO | target compilation and architecture guardrail | B-pass API compatibility, Guardrail; bus ownership/timing and physical validation HW-pending |
+
+## Inactive M9 dual-ADS1115 software-integration contracts
+
+These checks cover one platform software sequencer and ESP-IDF 6.0.2 source/API
+compatibility only. M6B and M9 remain incomplete, production uses simulated
+food probes, and no row is connected I2C, calibration, sensor, or electrical
+evidence.
+
+| Contract | Implementation evidence | Test/evidence | Validation |
+|---|---|---|---|
+| all unknown physical values stay explicit | exactly two device records require port, SDA/SCL, clock, pull-up policy, and address; channels require probe/device map, mux, gain, and rate; timeout and sample maximum age have no defaults; raw conversion requires an injected calibration/validity policy | `test_ads1115_invalid_incomplete_configurations_are_rejected`; source guardrail | H-pass, B-pass, Guardrail; physical values/calibration HW-pending |
+| one owner preserves channel freshness | one round-robin state machine configures and starts one explicit channel, returns, then later checks busy and reads only that active conversion; every mux/gain/rate selection requires a new completed conversion | `test_ads1115_two_devices_and_channels_are_sequenced_without_reuse`, `test_ads1115_start_and_read_never_share_a_service_step`, `test_ads1115_mux_gain_rate_changes_require_a_new_completed_conversion` | H-pass, B-pass, Guardrail |
+| readiness and timeout never synchronously wait | busy returns without `get_value`; a monotonic deadline clears the active sample and advances without polling or sleeping; the configured deadline must exceed the TI `1 / (0.9 * DR)` conversion-period floor | `test_ads1115_busy_and_stuck_conversion_never_read_or_block`; source guardrail | H-pass, B-pass; real service cadence/I2C timing target-pending |
+| cached reads are independent and age-bounded | `service()` alone performs backend work; `read(probe_id)` only checks the timestamped cache; first/missing/failed/expired samples are absent and one failure does not invalidate unrelated probes | `test_ads1115_per_probe_failures_clear_only_the_affected_sample`, `test_ads1115_cached_readings_expire_and_unknown_ids_are_absent` | H-pass, B-pass |
+| monitoring inputs remain outside chamber control | configure/start/busy/read/calibration failures become affected-probe absence only; missing/invalid food inputs do not create a chamber fault or change heater demand | `test_ads1115_missing_or_invalid_food_probe_never_changes_chamber_control` | H-pass, B-pass; physical disconnect behavior HW-pending |
+| project steady paths are ordinary-C++-allocation quiet | configuration/cache storage allocates during initialization; measured fake-backend start/poll/read paths contain no repeated allocation and project sources contain no delay/task creation | `test_ads1115_steady_state_service_and_read_are_observed_allocation_free`; `tools/check_architecture.py` | H-pass ordinary-C++ observation, Guardrail; driver/ESP-IDF allocation and boundedness unproven |
+| pinned backend is real but inactive | target-only RAII owns two descriptors and calls init/free, single-shot mode, mux, gain, rate, start, busy, and value APIs; explicit clock/pull-ups overwrite init values before first I2C I/O; runtime/main retain `SimulatedFoodProbeSource` and no `i2cdev_init()` | ESP-IDF target compilation and architecture guardrail | B-pass API compatibility, Guardrail; connected bus and ControlTask placement target-pending |
+| shared-bus consistency is validated without overconstraining separate buses | same port requires equal pins/clock/pull-up policy and distinct addresses; separate non-overlapping ports may reuse an address; both selected devices require at least one mapped channel | configuration host tests and source guardrail | H-pass, B-pass; actual bus topology HW-pending |
 
 ## M5 command/runtime contracts added by review remediation
 

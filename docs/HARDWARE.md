@@ -78,7 +78,7 @@ before either gate is marked complete.
 |---|---|---|---|---|
 | `CTRL-001` | Main controller | SuooTci `KFB003` / eMAG `D1T7M22BM`; N16R8 variant reported | Carrier identity **CONFIRMED FROM DOCUMENTATION**; SoC/storage/USB **CONFIRMED FROM HARDWARE** | M6A complete; simulated I/O only |
 | `CHAMBER-001` | Authoritative chamber sensor/frontend | MAX31865 with PT100, three-wire; exact physical module and remaining RTD facts pending | Converter/RTD/wire choices **CONFIRMED FROM DOCUMENTATION** — user selection; module/electrical facts **UNCONFIRMED** | Software adapter implemented/inactive; production, wiring, and hardware validation blocked at M6B/M7 |
-| `PROBES-001` | Food-probe analog acquisition | Two ADS1115 converters selected; complete probe frontend and channel map pending | Converter quantity/type **CONFIRMED FROM DOCUMENTATION** — user selection; modules/electrical design **UNCONFIRMED** | Registry driver imported; adapter/wiring blocked at M6B/M9 |
+| `PROBES-001` | Food-probe analog acquisition | Two ADS1115 converters selected; complete probe frontend and channel map pending | Converter quantity/type **CONFIRMED FROM DOCUMENTATION** — user selection; modules/electrical design **UNCONFIRMED** | Software adapter implemented/inactive; production, wiring, and connected validation blocked at M6B/M9 |
 | `HEATER-001` | SSR/heater power interface | Not selected | **UNCONFIRMED** | Blocked at M6B; no GPIO assigned |
 | `SAFETY-001` | Independent thermal/electrical cutoff | Not designed | **UNCONFIRMED** | Required at M6B |
 | `POWER-001` | Product power supply/rails | Not selected | **UNCONFIRMED** | Blocked at M6B |
@@ -206,22 +206,43 @@ implementation:
 | Driver capabilities | ADS1115 input mux, programmable gain, 8..860 SPS data rate, single-shot/continuous modes, explicit start/busy/value operations, thresholds, and comparator configuration | **CONFIRMED FROM DOCUMENTATION** — versioned public header/source |
 | Two-device support | Upstream versioned example constructs two descriptors on one I2C bus with distinct ADDR straps | **CONFIRMED FROM DOCUMENTATION** — example; its GND/VCC choices are not project pin assignments |
 | ESP-IDF 6 build path | locked `i2cdev` selects ESP-IDF 6's new `i2c_master` driver | **CONFIRMED FROM CONFIG** — fresh ESP32-S3 configure/build output |
-| Current firmware use | dependencies compile, but production continues to compose simulated probe sources | **CONFIRMED FROM CONFIG** |
+| Conversion timing | Conversion time is `1 / DR`; nominal data rates vary by +/-10%; single-shot power-up is approximately 25 us | **CONFIRMED FROM DOCUMENTATION** — TI ADS1115 Rev. E sections 5.5, 7.3.6, and 7.4.2.1 |
+| Descriptor initialization | `ads111x_init_desc()` writes a driver-owned 1 MHz clock into `i2c_dev_t` before creating its mutex | **CONFIRMED FROM DOCUMENTATION** — pinned 1.1.14 source |
+| Locked I2C behavior | first I/O lazily creates port/device state; mutex and I/O calls use `CONFIG_I2CDEV_TIMEOUT`; retry paths contain `vTaskDelay()` and may recreate device handles | **CONFIRMED FROM DOCUMENTATION** — pinned `i2cdev` 2.1.2 source |
+| Current firmware use | inactive adapter and real API backend compile; production continues to compose `SimulatedFoodProbeSource` | **CONFIRMED FROM CONFIG** — focused host tests and ESP-IDF 6.0.2 cross-build only |
 
 Two devices can share a bus only when their physical ADDR straps select two
 different addresses from the ADS1115 set `0x48`, `0x49`, `0x4a`, and `0x4b`.
 No address, I2C port, SDA/SCL GPIO, pull-up, speed, channel, gain, or sampling
 choice is made by importing the driver.
 
-The future M9 implementation remains in `smoker_platform` behind the existing
-`IFoodProbeSource` port and creates no sensor task. The driver exposes separate
-start, readiness, and value operations, so conversion work can be staged and
-bounded in the existing control schedule after the actual frontend is known.
-An I2C/conversion/validity failure becomes an absent reading for the affected
-monitoring probe. Per BR-005/SF-008, it may produce a probe alarm but never
-controls the heater or becomes the authoritative chamber measurement.
+The inactive M9 adapter remains in `smoker_platform` behind the existing
+`IFoodProbeSource` port and creates no sensor task. One owner sequences both
+descriptors and all mapped channels. A service step configures an explicit
+mux/gain/rate, starts one single-shot conversion, and returns; a later step
+checks the monotonic stuck deadline and busy state before reading the same
+conversion. `read(probe_id)` performs no I2C and returns only an independently
+timestamped cache entry before its configured maximum age expires.
 
-### Physical facts still required before the adapter or pin assignment
+Raw codes enter a mandatory injected calibration/validity policy. The adapter
+contains no physical conversion defaults. Configuration requires the I2C port,
+SDA/SCL, clock, pull-up policy, addresses, channel map, mux/gain/rate, timeout,
+and maximum age. Same-bus devices must agree on bus configuration and use
+different addresses; distinct non-overlapping buses may reuse an address. The
+target backend overrides the driver-owned 1 MHz descriptor value before its
+first I2C transaction and uses the real pinned init/free, mode, mux, gain, rate,
+start, busy, and raw-value APIs.
+
+Project-owned service/read code contains no explicit delay, poll loop, task
+creation, or steady-state allocation. That does not remove locked `i2cdev`'s
+mutex waits, transaction timeouts, lazy setup, internal retry delays, or
+possible driver/ESP-IDF allocation. The inactive adapter is therefore not yet
+approved for ControlTask placement. Production neither calls `i2cdev_init()`
+nor constructs it. An I2C/conversion/calibration/validity failure clears only
+the affected monitoring sample; BR-005/SF-008 keep chamber control and heater
+demand unchanged.
+
+### Physical facts still required before runtime activation or pin assignment
 
 | Item | Current finding | Classification |
 |---|---|---|

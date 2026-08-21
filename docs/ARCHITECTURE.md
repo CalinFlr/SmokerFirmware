@@ -74,7 +74,7 @@ Do not create ports before a milestone needs them.
 
 ESP-IDF/hardware-specific implementations.
 
-Current M15 plus inactive M7 software implementations:
+Current M15 plus inactive M7/M9 software implementations:
 
 - simulated chamber/probe sources;
 - simulated heater output;
@@ -98,13 +98,14 @@ Current M15 plus inactive M7 software implementations:
 - an inactive MAX31865 chamber-sensor adapter behind `IChamberSensor`, with a
   host-testable result/configuration policy and a target-only RAII backend over
   the pinned 1.0.8 API. Production composition remains simulated.
+- an inactive dual-ADS1115 food-probe adapter behind `IFoodProbeSource`, with
+  one host-testable staged acquisition owner, timestamped per-probe caches,
+  mandatory injected calibration/validity, and a target-only RAII backend over
+  the pinned 1.1.14 API. Production composition remains simulated.
 
 Future examples:
 
 - M8 `espressif/pid_ctrl` adapter behind an application-owned control port;
-- dual-ADS1115 food-probe acquisition. The exact-pinned registry driver is
-  present, but its `smoker_platform` adapter and runtime activation remain
-  gated on the physical M6B module/address/frontend record;
 - SSR heater output;
 - NVS session/config store;
 - ESP clock/reset-reason adapter;
@@ -171,6 +172,48 @@ latency. Continuous conversion is provisional. SPI-bus ownership and timing,
 module/input-network and bias settling, wiring, accuracy, noise, fault recovery,
 and sustained physical behavior remain gated on M6B facts and connected M7
 tests.
+
+### Inactive M9 dual-ADS1115 boundary
+
+M9 software integration also leaves production composition unchanged. One
+`Ads1115FoodProbeSource` owns the complete channel round robin and per-channel
+state. An idle service step explicitly configures mux, gain, and data rate for
+one mapped channel, starts a single-shot conversion, and returns. A later step
+checks a monotonic deadline, calls the pinned busy API once, and reads the raw
+conversion value only when that same conversion reports ready. It never sleeps,
+polls in a loop, creates a task, or allows a previously selected mux result to
+cross into the next channel.
+
+`IFoodProbeSource::read(probe_id)` performs no I2C work. It returns only a
+timestamped cached `Temperature` while the configured maximum age has not
+expired. Before the first successful conversion, after expiry, or after a
+configure/start/busy/read/calibration/validity failure, that probe is absent;
+other probe caches remain independent. Raw ADS1115 codes are passed to a
+mandatory injected calibration/validity policy. The adapter supplies no probe
+curve, divider, voltage, temperature, calibration, or channel-purpose default.
+
+Every device record explicitly requires I2C port, SDA/SCL GPIO, clock, pull-up
+policy, and address; every channel requires probe/device mapping, mux, gain, and
+data rate. Conversion timeout and sample maximum age are also explicit. Two
+devices on one port must use the same pins/clock/pull-up policy and distinct
+addresses. Devices on separate non-overlapping buses may reuse an address.
+
+The target-only backend owns exactly two `i2c_dev_t` descriptors and uses the
+real 1.1.14 init/free, mode, mux, gain, rate, start, busy, and value APIs.
+`ads111x_init_desc()` writes a driver-owned 1 MHz clock and creates a mutex; the
+backend replaces that clock and applies the required pull-up policy before
+`ads111x_set_mode()` performs the first I2C transaction. Production does not
+call `i2cdev_init()` or construct this backend.
+
+The TI Rev. E datasheet states conversion time is `1 / DR` and specifies
+data-rate variation of +/-10%; the software validates the explicit stuck
+deadline against that conversion-period floor. The approximately 25 us
+single-shot power-up and scheduling/frontend margin have no specified maximum,
+so the actual deadline remains mandatory configuration. Locked `i2cdev` may
+wait up to `CONFIG_I2CDEV_TIMEOUT`, lazily create bus/device state, retry with
+internal task delays, and allocate during initialization or recovery. Host
+allocation observation and an API cross-build therefore do not prove real I2C
+latency, allocation freedom, ControlTask suitability, or physical behavior.
 
 ## Runtime-state ownership
 
@@ -365,6 +408,12 @@ All ports used directly by the critical cycle must have bounded, non-blocking
 behavior appropriate to their adapter. `IEventSink::publish()` must enqueue or
 store locally without network/storage I/O. A future network/storage consumer
 must run outside the critical dependency chain.
+
+The inactive M9 adapter is deliberately not placed in this cycle yet. Its
+`service()`/cached-`read()` split proves software sequencing without pretending
+the locked target I2C stack is sufficiently bounded. Activation and service
+placement require connected timing evidence against the final ControlTask
+budget; no separate sensor task is authorized.
 
 At M14 the `ControlTask` retains its static 12 KiB stack and priority and is
 pinned to core 1. Wi-Fi, TCP/IP, the default event loop, fallback timer, HTTP
@@ -822,6 +871,10 @@ M15 checks additionally cover the exact MQTT pin, platform confinement,
 callback isolation, two bounded mailboxes, fair ControlTask draining, static
 core/priority placement, TLS/session/topic settings, provisioning boundaries,
 status/result separation, and bounded payloads.
+The inactive M7/M9 checks additionally keep both hardware drivers target-only,
+preserve simulated production composition, enforce explicit configuration and
+freshness/call ordering, and reject project-owned waits/tasks in their adapter
+paths.
 `tools/check_traceability.py` requires one explicit matrix row
 for every approved rule and validates concrete host-test references for rules
 marked implemented.

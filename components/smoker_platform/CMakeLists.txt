@@ -1,4 +1,5 @@
 set(smoker_platform_sources
+    "src/ads1115_food_probe_source.cpp"
     "src/blynk_connection_support.cpp"
     "src/blynk_command_support.cpp"
     "src/blynk_provisioning_support.cpp"
@@ -14,6 +15,7 @@ set(smoker_platform_sources
 
 if(ESP_PLATFORM)
     list(APPEND smoker_platform_sources
+        "src/ads1115_target_backend.cpp"
         "src/blynk_service.cpp"
         "src/firmware_update_service.cpp"
         "src/history_service.cpp"

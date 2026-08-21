@@ -1,3 +1,12 @@
+Historical status note
+
+This plan records the earlier dependency-import checkpoint. Its adapter
+non-goal was refined by `.agent/M9_ADS1115_SOFTWARE_INTEGRATION_PLAN.md` on
+2026-08-21: an inactive host-tested/cross-buildable adapter is now allowed when
+all physical values remain required configuration and production stays
+simulated. Runtime activation, concrete `i2cdev_init()`, bus/pin/address
+selection, calibration, and connected validation remain gated by M6B/M9.
+
 # Dual ADS1115 dependency preparation plan
 
 ## Goal
@@ -85,3 +94,7 @@ git diff --check
   `tools/verify.sh --idf-only` using the fresh `build-ads1115` directory.
 - No adapter, address, channel, GPIO, or connected-hardware behavior was added
   or claimed; the M6B/M9 physical gates above remain open.
+- The subsequent inactive integration adds one staged single-shot sequencer,
+  timestamped caches, mandatory injected calibration/validity, and a target-only
+  pinned-API backend. It does not revise this checkpoint's dependency evidence
+  or activate I2C in production.

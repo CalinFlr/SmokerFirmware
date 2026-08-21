@@ -963,20 +963,48 @@ versioned lockfile: `esp-idf-lib/i2cdev` 2.1.2 at hash
 The selected `i2cdev` release detects ESP-IDF 6.0 and compiles against its new
 `i2c_master` driver.
 
-Importing and cross-building these components is M9 preparation, not a
-completed probe frontend or connected-hardware claim. Two devices on a shared
-bus require two distinct physical ADDR selections from `0x48..0x4b`; the
-upstream example's GND/VCC straps are not project assignments. Production
-continues to compose simulated probe sources until the exact module revisions,
-supplies, address straps, pull-ups, channel purposes, analog conditioning,
-probe curves, calibration, I2C port, and GPIOs are documented at M6B.
+Importing, wrapping, and cross-building these components is M9 software
+integration, not a completed probe frontend or connected-hardware claim. Two
+devices on a shared bus require two distinct physical ADDR selections from
+`0x48..0x4b`; the upstream example's GND/VCC straps are not project
+assignments. Production continues to compose `SimulatedFoodProbeSource` until
+the exact module revisions, supplies, address straps, pull-ups, channel
+purposes, analog conditioning, probe curves, calibration, I2C port, and GPIOs
+are documented at M6B.
 
-The future implementation remains a `smoker_platform` adapter behind the
-existing `IFoodProbeSource` port. It creates no task and does not expose
-ESP-IDF/driver types to `smoker_app` or `smoker_core`. The driver's separate
-start-conversion, busy, and value operations permit a staged bounded schedule;
-the exact mode, gain, data rate, mux sequence, and validity policy depend on
-the physical frontend and connected tests.
+The inactive implementation is one `smoker_platform` acquisition owner behind
+the existing `IFoodProbeSource` port. It owns both device/channel state and
+uses explicit single-shot mux/gain/rate configuration, start, a later one-shot
+busy check, and value retrieval only after that same conversion completes. It
+creates no task, contains no project-owned wait/poll loop, and does not expose
+ESP-IDF/driver types to `smoker_app` or `smoker_core`. `read(probe_id)` performs
+no I2C work; it returns only an independently timestamped cache entry before a
+required configured maximum age expires.
+
+Raw ADC codes have no physical interpretation in the adapter. A mandatory
+injected calibration/validity policy must produce `Temperature`; there is no
+probe curve, divider, voltage range, temperature range, or calibration default.
+I2C port, SDA/SCL, clock, internal/external pull-up policy, address, device/
+channel/probe map, mux, gain, data rate, conversion timeout, and sample age are
+all explicit required configuration. Same-port devices require compatible bus
+configuration and distinct addresses; separate non-overlapping buses may reuse
+an address.
+
+The target-only RAII backend calls the real init/free, mode, mux, gain, rate,
+start, busy, and value APIs. `ads111x_init_desc()` writes 1 MHz into its public
+descriptor and creates a mutex; project configuration replaces that clock and
+sets the explicit pull-up policy before the first I2C transaction. Production
+does not call `i2cdev_init()` or instantiate the backend.
+
+TI specifies conversion time as `1 / DR` with +/-10% data-rate variation and
+approximately 25 us single-shot power-up. The monotonic stuck deadline remains
+mandatory configuration and must exceed the documented worst conversion
+period because the approximate power-up, service cadence, and physical
+frontend margin have no established maximum. Locked `i2cdev` may wait up to
+`CONFIG_I2CDEV_TIMEOUT`, lazily create bus/device state, retry with internal
+task delays, and allocate during initialization or error recovery. Host/API
+cross-build evidence therefore does not establish bounded real target latency,
+allocation freedom, or suitability for ControlTask.
 
 An I2C, conversion, calibration, or validity failure becomes an absent reading
 for the affected food probe. Per BR-005 and SF-008, food probes remain
