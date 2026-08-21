@@ -20,11 +20,11 @@ A future item is **not permission to implement it early**.
   and connected validation remain open. SSR, power, and independent-protection
   hardware are still blocked on exact parts.
 - **M6B and M7-M10 — remaining controller product baseline:** incomplete. M7
-  now has an inactive host-tested/cross-buildable MAX31865 software boundary,
-  but production remains simulated and its physical activation is still gated
-  by M6B. Product V0 cannot be called complete before real sensing/output, food
-  probes, persistence, and recovery are implemented and validated at their
-  appropriate levels.
+  and M9 now have inactive host-tested/cross-buildable MAX31865 and dual-ADS1115
+  software boundaries, but production remains simulated and physical activation
+  stays gated by M6B. Product V0 cannot be called complete before real sensing/
+  output, food probes, persistence, and recovery are implemented and validated
+  at their appropriate levels.
 - **M11 — local display:** postponed because no display has been purchased.
 - **M12 — Wi-Fi + local API/UI:** implemented for the simulated controller and
   host/cross-build validated; physical radio/provisioning/runtime validation on
@@ -302,9 +302,10 @@ Definition of done:
 
 ## M9 — Real food probes
 
-Status: **Preparation started — exact ADS1115 driver imported for two selected
-converters; modules, addresses, channel map, probe frontend, wiring, and
-connected validation remain blocked on M6B.**
+Status: **Software adapter implemented but inactive — host behavior and ESP-IDF
+6.0.2 API compatibility are validated; modules, addresses, channel map, probe
+frontend, runtime service placement, wiring, and connected evidence remain
+blocked on M6B.**
 
 Integrate actual probe frontend/protocol.
 
@@ -316,18 +317,39 @@ The upstream example demonstrates two devices on one bus, but its GND/VCC ADDR
 straps are example wiring only. The project must document two distinct physical
 addresses from `0x48..0x4b` before activation.
 
-Keep the future adapter in `smoker_platform` behind `IFoodProbeSource`, without
-a separate sensor task. Use the driver's explicit start/readiness/value API to
-select a bounded conversion schedule only after gain, rate, channel mapping,
-analog conditioning, and calibration are known. An ADC/read/validity failure
-is an absent monitoring-probe reading and must not change chamber control or
-heater demand.
+The inactive adapter stays in `smoker_platform` behind `IFoodProbeSource`,
+without a separate sensor task. One acquisition owner stages explicit
+mux/gain/rate configuration plus single-shot start, returns, and only on a
+later service step checks deadline/readiness and obtains the same raw result.
+`read(probe_id)` is I2C-free and returns an independently timestamped cached
+temperature only before the required configured maximum age expires.
+
+Raw codes require injected calibration/validity with no physical defaults.
+All buses, pins, pull-ups, addresses, mappings, mux/gain/rate values, conversion
+timeout, and sample age remain explicit configuration. Same-bus devices require
+compatible settings and distinct addresses; genuinely separate buses may reuse
+an address. The target backend overrides `ads111x_init_desc()`'s hard-coded
+1 MHz descriptor clock before the first transaction.
+
+Project-owned service/read code has no explicit delay, polling loop, new task,
+or steady-state allocation. Locked `i2cdev` still uses timeout-capable mutex/
+I2C operations, lazy bus setup, internal retry delays, and possible allocation,
+so target ControlTask suitability remains unproven and production stays on
+`SimulatedFoodProbeSource`. An ADC/read/calibration/validity failure is absent
+only for the affected monitoring probe and cannot change chamber control,
+chamber faults, or heater demand.
 
 Confirm the device-specific maximum configured probe count from the actual
 frontend/hardware. Do not turn that capacity into a universal `smoker_core`
 constant.
 
 Requires the food-probe frontend/protocol portion of M6B.
+
+M9 remains incomplete until the physical modules, bus/address/channel/front-end
+facts and device-specific capacity are recorded, a service placement is proven
+against the real ControlTask budget, and known-voltage, calibration, accuracy,
+noise, disconnect/short, sustained-run, and heater-interference behavior are
+validated on the target.
 
 ## M10 — Persistence + power recovery
 

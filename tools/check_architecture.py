@@ -749,9 +749,11 @@ def check_m12_transport_contract(failures: CheckFailures) -> None:
         and "fd18497adfb7210d750188986bc7cebc048db36abb64fdbe7216d4536083c4a2"
         in decisions
         and "two distinct physical ADDR selections" in decisions
-        and "compose simulated probe sources" in decisions
+        and "Production continues to compose `SimulatedFoodProbeSource`" in decisions
+        and "injected calibration/validity policy" in decisions
+        and "CONFIG_I2CDEV_TIMEOUT" in decisions
         and "no ADS1115 value or failure directly changes" in decisions,
-        "D057 must preserve the exact-pinned dual-ADS1115 dependency, physical gate, and monitoring-only boundary",
+        "D057 must preserve the exact-pinned dual-ADS1115 dependency, inactive sequencer, physical gate, and monitoring-only boundary",
     )
     failures.require(
         "## D058 — M15 pins ESP-MQTT and provisions Blynk through UART0/NVS"
@@ -1089,6 +1091,214 @@ def check_m7_max31865_contract(failures: CheckFailures) -> None:
         "test_max31865_premature_application_tick_latches_fault_and_heater_off",
     ):
         failures.require(evidence in tests, f"M7 host evidence is missing: {evidence}")
+
+
+def check_m9_ads1115_contract(failures: CheckFailures) -> None:
+    platform = ROOT / "components/smoker_platform"
+    source_header = (
+        platform / "include/smoker/platform/ads1115_food_probe_source.hpp"
+    ).read_text()
+    target_header = (
+        platform / "include/smoker/platform/ads1115_target_backend.hpp"
+    ).read_text()
+    source = (platform / "src/ads1115_food_probe_source.cpp").read_text()
+    target = (platform / "src/ads1115_target_backend.cpp").read_text()
+    platform_cmake = (platform / "CMakeLists.txt").read_text()
+    runtime = (platform / "src/simulation_runtime.cpp").read_text()
+    main_source = (ROOT / "main/app_main.cpp").read_text()
+    tests = (ROOT / "tests/host/smoker_m9_tests.cpp").read_text()
+
+    lower_layer_text = "\n".join(
+        path.read_text()
+        for path in source_files("components/smoker_core", "components/smoker_app")
+    )
+    failures.require(
+        "ads111" not in lower_layer_text.lower()
+        and "i2c_dev_t" not in lower_layer_text
+        and "driver/i2c" not in lower_layer_text.lower(),
+        "smoker_core/smoker_app must not contain ADS1115, i2cdev, or I2C driver types",
+    )
+    failures.require(
+        '"src/ads1115_food_probe_source.cpp"' in platform_cmake
+        and '"src/ads1115_target_backend.cpp"' in platform_cmake
+        and platform_cmake.find('"src/ads1115_target_backend.cpp"')
+            > platform_cmake.find("if(ESP_PLATFORM)"),
+        "the ADS1115 sequencer must be host-buildable and its real backend target-only",
+    )
+
+    failures.require(
+        "class Ads1115FoodProbeSource final : public app::IFoodProbeSource"
+            in source_header
+        and "class IAds1115Backend" in source_header
+        and "class IAds1115SampleConverter" in source_header
+        and "void service() noexcept;" in source_header
+        and "std::vector<std::optional<CachedSample>> samples_" in source_header
+        and "AcquisitionState state_" in source_header,
+        "M9 must retain one host-testable acquisition owner with timestamped caches",
+    )
+    failures.require(
+        all(
+            required in source_header
+            for required in (
+                "int i2c_port;",
+                "int sda_gpio;",
+                "int scl_gpio;",
+                "std::uint32_t clock_speed_hz;",
+                "Ads1115PullupPolicy pullup_policy;",
+                "std::uint8_t address;",
+                "std::size_t device_index;",
+                "Ads1115Mux mux;",
+                "Ads1115Gain gain;",
+                "Ads1115DataRate data_rate;",
+                "core::Duration conversion_timeout_",
+                "core::Duration sample_maximum_age_",
+            )
+        )
+        and "Ads1115DeviceConfiguration()" not in source_header
+        and "Ads1115ChannelConfiguration()" not in source_header
+        and "Ads1115AcquisitionConfiguration()" not in source_header,
+        "all ADS1115 bus, mapping, conversion, timeout, and age values must be explicit",
+    )
+    failures.require(
+        "devices.size() != ads1115_device_count" in source
+        and "compatible_device_pair" in source
+        and "first.address != second.address" in source
+        and "first.i2c_port == second.i2c_port" in source
+        and "device_has_channel" in source
+        and "channels[earlier].probe_id == channel.probe_id" in source
+        and "minimum_ads1115_conversion_timeout(channel.data_rate)" in source,
+        "M9 configuration must validate two devices, shared buses, mappings, IDs, and deadlines",
+    )
+
+    read_section = source_section(
+        source,
+        "std::optional<core::Temperature> Ads1115FoodProbeSource::read(",
+        "bool Ads1115FoodProbeSource::configured()",
+    )
+    failures.require(
+        bool(read_section)
+        and "backend_" not in read_section
+        and "samples_[index]" in read_section
+        and "sample_maximum_age()" in read_section
+        and "return std::nullopt" in read_section,
+        "IFoodProbeSource::read() must perform cached age validation without I2C",
+    )
+    start_section = source_section(
+        source,
+        "void Ads1115FoodProbeSource::start_next_conversion()",
+        "void Ads1115FoodProbeSource::poll_active_conversion()",
+    )
+    poll_section = source_section(
+        source,
+        "void Ads1115FoodProbeSource::poll_active_conversion()",
+        "void Ads1115FoodProbeSource::fail_active_probe()",
+    )
+    failures.require(
+        bool(start_section)
+        and "backend_.configure_channel(channel)" in start_section
+        and "backend_.start_conversion(channel.device_index)" in start_section
+        and "backend_.get_value" not in start_section
+        and bool(poll_section)
+        and poll_section.find("clock_.now() >= conversion_deadline_")
+            < poll_section.find("backend_.conversion_busy(")
+        and poll_section.find("backend_.conversion_busy(")
+            < poll_section.find("if (busy) return")
+            < poll_section.find("backend_.get_value(")
+        and poll_section.find("backend_.get_value(")
+            < poll_section.find("sample_converter_.convert("),
+        "M9 must start and later poll/read/calibrate the same explicit channel in order",
+    )
+    failures.require(
+        "samples_[active_channel_].reset();" in source
+        and "next_channel_ = (active_channel_ + 1U)" in source,
+        "M9 failures must clear only the active probe and advance one owner sequence",
+    )
+
+    for api in (
+        "ads111x_init_desc(",
+        "ads111x_free_desc(",
+        "ads111x_set_mode(",
+        "ads111x_set_input_mux(",
+        "ads111x_set_gain(",
+        "ads111x_set_data_rate(",
+        "ads111x_start_conversion(",
+        "ads111x_is_busy(",
+        "ads111x_get_value(",
+    ):
+        failures.require(api in target, f"the target ADS1115 backend must call {api}")
+    initialize_section = source_section(
+        target,
+        "bool Ads1115TargetBackend::initialize(",
+        "bool Ads1115TargetBackend::configure_channel(",
+    )
+    init_desc = initialize_section.find("ads111x_init_desc(")
+    clock_override = initialize_section.find("descriptor.cfg.master.clk_speed")
+    first_io = initialize_section.find("ads111x_set_mode(")
+    failures.require(
+        bool(initialize_section)
+        and init_desc >= 0
+        and clock_override > init_desc
+        and first_io > clock_override
+        and "ADS111X_MODE_SINGLE_SHOT" in initialize_section
+        and "descriptor.cfg.sda_pullup_en" in initialize_section
+        and "descriptor.cfg.scl_pullup_en" in initialize_section,
+        "the explicit clock/pull-up policy must override init_desc before first single-shot I2C I/O",
+    )
+    failures.require(
+        "std::array<i2c_dev_t, 2U> descriptors_" in target_header
+        and "~Ads1115TargetBackend()" in target
+        and "release_descriptors();" in target,
+        "the target backend must be the RAII owner of both ADS1115 descriptors",
+    )
+
+    project_m9 = source + "\n" + target
+    for forbidden in (
+        "vTaskDelay(",
+        "sleep(",
+        "delay(",
+        "malloc(",
+        "calloc(",
+        "realloc(",
+        "new ",
+        "make_unique",
+        "make_shared",
+        "xTaskCreate",
+        "i2cdev_init(",
+    ):
+        failures.require(
+            forbidden not in project_m9,
+            f"project-owned ADS1115 paths must not contain {forbidden}",
+        )
+    failures.require(
+        "ads111x_gain_values" not in project_m9
+        and "raw_to_voltage" not in project_m9.lower()
+        and "steinhart" not in project_m9.lower(),
+        "the ADS1115 adapter must expose raw codes only to injected calibration",
+    )
+    failures.require(
+        "SimulatedFoodProbeSource" in runtime
+        and "start_simulation_runtime" in main_source
+        and "Ads1115FoodProbeSource" not in runtime
+        and "Ads1115TargetBackend" not in runtime
+        and "Ads1115FoodProbeSource" not in main_source
+        and "Ads1115TargetBackend" not in main_source
+        and "i2cdev_init(" not in runtime
+        and "i2cdev_init(" not in main_source,
+        "production composition must remain simulated and must not initialize ADS1115/I2C",
+    )
+
+    for evidence in (
+        "test_ads1115_invalid_incomplete_configurations_are_rejected",
+        "test_ads1115_two_devices_and_channels_are_sequenced_without_reuse",
+        "test_ads1115_start_and_read_never_share_a_service_step",
+        "test_ads1115_busy_and_stuck_conversion_never_read_or_block",
+        "test_ads1115_mux_gain_rate_changes_require_a_new_completed_conversion",
+        "test_ads1115_per_probe_failures_clear_only_the_affected_sample",
+        "test_ads1115_cached_readings_expire_and_unknown_ids_are_absent",
+        "test_ads1115_steady_state_service_and_read_are_observed_allocation_free",
+        "test_ads1115_missing_or_invalid_food_probe_never_changes_chamber_control",
+    ):
+        failures.require(evidence in tests, f"M9 host evidence is missing: {evidence}")
 
 
 def check_m14_history_contract(failures: CheckFailures) -> None:
@@ -1433,6 +1643,7 @@ def main() -> int:
     check_reproducible_build_contract(failures)
     check_m12_transport_contract(failures)
     check_m7_max31865_contract(failures)
+    check_m9_ads1115_contract(failures)
     check_m14_history_contract(failures)
     check_m15_blynk_contract(failures)
     return failures.finish()
