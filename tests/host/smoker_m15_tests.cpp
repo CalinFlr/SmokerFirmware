@@ -1,3 +1,4 @@
+#include "smoker/platform/blynk_connection_support.hpp"
 #include "smoker/platform/blynk_command_support.hpp"
 #include "smoker/platform/blynk_provisioning_support.hpp"
 #include "smoker/platform/blynk_remote_support.hpp"
@@ -266,6 +267,92 @@ void test_raw_mailbox_stop_reservation_and_concurrency()
     assert(ordered.load() && concurrent.pending() == 0U);
 }
 
+void test_disconnect_reconnect_boundary_discards_old_connection_state()
+{
+    smoker::platform::BlynkConnectionBoundary boundary;
+    const auto first_generation = boundary.callback_connected();
+    const auto first_connection = boundary.poll();
+    assert(first_connection.connected && first_connection.connection_started);
+    assert(!first_connection.cleanup_required);
+    assert(boundary.usable(first_connection));
+
+    smoker::platform::BlynkInboundMailbox inbound;
+    assert(inbound.push("CmdStart", "1", first_generation)
+        == smoker::platform::BlynkInboundAdmission::Accepted);
+
+    smoker::platform::BlynkCommandMapper mapper{recipe()};
+    assert(mapper.map("CmdStartTargetC", "130.0", 1U).decision
+        == smoker::platform::BlynkCommandDecision::Accepted);
+    smoker::platform::BlynkCommandResults results;
+    assert(results.track(41U));
+    const std::array old_result{smoker::app::CommandResultView{41U, true}};
+    results.observe(old_result);
+    smoker::platform::BlynkEventScheduler events;
+    events.queue(smoker::platform::BlynkEventType::Alarm, "old alarm");
+
+    smoker::platform::BlynkInboundMailbox saturated;
+    for (std::size_t index = 0U;
+         index < smoker::platform::blynk_inbound_capacity - 1U; ++index) {
+        assert(saturated.push("CmdAcknowledgeAlarm", "1", first_generation)
+            == smoker::platform::BlynkInboundAdmission::Accepted);
+    }
+    assert(saturated.push("CmdStart", "1", first_generation)
+        == smoker::platform::BlynkInboundAdmission::Full);
+    std::uint32_t observed_drops = 0U;
+
+    boundary.callback_disconnected();
+    const auto second_generation = boundary.callback_connected();
+    // A genuinely new command can already be queued before the consumer sees
+    // the collapsed disconnect/reconnect pair.
+    assert(inbound.push("CmdStart", "1", second_generation)
+        == smoker::platform::BlynkInboundAdmission::Accepted);
+
+    const auto reconnected = boundary.poll();
+    assert(reconnected.connected && reconnected.cleanup_required);
+    assert(reconnected.connection_started);
+    assert(reconnected.connection_generation == second_generation);
+    assert(!boundary.accepts(first_generation));
+    assert(boundary.accepts(second_generation));
+
+    // These are the platform-neutral parts of handle_disconnect(). The ESP-IDF
+    // integration is guarded separately because blynk_service.cpp is target-only.
+    mapper.disconnected();
+    results.disconnected();
+    events.disconnected();
+    observed_drops = saturated.dropped_count();
+    assert(!results.pop().has_value() && results.pending_count() == 0U);
+    assert(!events.pending_publish(100'000).has_value());
+    assert(observed_drops == saturated.dropped_count());
+    assert(saturated.push("CmdStart", "1", second_generation)
+        == smoker::platform::BlynkInboundAdmission::Full);
+    // Only the old-generation watermark was acknowledged. A real drop from
+    // the new generation remains distinguishable and reportable.
+    assert(observed_drops != saturated.dropped_count());
+
+    smoker::platform::BlynkInboundCommand command;
+    std::size_t discarded = 0U;
+    std::size_t accepted = 0U;
+    while (inbound.try_pop(command)) {
+        if (command.connection_generation != reconnected.connection_generation) {
+            ++discarded;
+            continue;
+        }
+        const auto mapped = mapper.map(
+            command.datastream_view(), command.payload_view(), 52U
+        );
+        assert(mapped.decision == smoker::platform::BlynkCommandDecision::Accepted);
+        const auto* const start = std::get_if<smoker::app::StartSessionCommand>(
+            &*mapped.command
+        );
+        assert(start != nullptr);
+        // The old connection's one-shot target must not parameterize this new
+        // live Start.
+        assert(start->recipe.stage.chamber_target->celsius() == 110.0F);
+        ++accepted;
+    }
+    assert(discarded == 1U && accepted == 1U);
+}
+
 void test_control_is_independent_of_blynk_transport()
 {
     const std::array probes{
@@ -318,6 +405,52 @@ bool capture_submission(
     capture.correlations.push_back(correlation);
     capture.stops.push_back(std::holds_alternative<smoker::app::StopSessionCommand>(command));
     return true;
+}
+
+bool validate_boundary_generation(
+    const void* const context,
+    const std::uint32_t connection_generation
+) noexcept
+{
+    return static_cast<const smoker::platform::BlynkConnectionBoundary*>(context)
+        ->accepts(connection_generation);
+}
+
+void test_translated_commands_do_not_cross_reconnect_boundary()
+{
+    smoker::platform::BlynkConnectionBoundary boundary;
+    const auto first_generation = boundary.callback_connected();
+    static_cast<void>(boundary.poll());
+
+    smoker::app::SpscCommandMailbox http;
+    smoker::app::SpscCommandMailbox blynk;
+    assert(blynk.push(
+        smoker::app::StartSessionCommand{61U, recipe()}, 601U, first_generation
+    ) == smoker::app::MailboxAdmission::Accepted);
+
+    boundary.callback_disconnected();
+    const auto second_generation = boundary.callback_connected();
+    const auto reconnected = boundary.poll();
+    assert(reconnected.cleanup_required && reconnected.connection_started);
+
+    smoker::platform::RoundRobinCommandDrain drain;
+    DrainCapture capture;
+    const auto stale = drain.drain(
+        http, blynk, &capture, capture_submission,
+        &boundary, validate_boundary_generation
+    );
+    assert(stale.submitted == 0U && stale.discarded == 1U);
+    assert(capture.correlations.empty());
+
+    assert(blynk.push(
+        smoker::app::AcknowledgeAlarmCommand{7U}, 602U, second_generation
+    ) == smoker::app::MailboxAdmission::Accepted);
+    const auto live = drain.drain(
+        http, blynk, &capture, capture_submission,
+        &boundary, validate_boundary_generation
+    );
+    assert(live.submitted == 1U && live.discarded == 0U);
+    assert(capture.correlations == std::vector<std::uint32_t>{602U});
 }
 
 void test_shared_ids_wrap_concurrency_and_fair_drain()
@@ -500,6 +633,20 @@ void test_provisioning_blob_and_fragmented_parser()
     assert(request->configuration == configuration);
     assert(parser.take_error() == smoker::platform::BlynkProvisioningParseError::None);
 
+    auto invalid_configuration = configuration;
+    copy_string(invalid_configuration.endpoint, "not-a-blynk-endpoint.example");
+    const auto invalid_frame = provisioning_frame(
+        provisioning_payload(invalid_configuration)
+    );
+    request.reset();
+    for (const auto byte : invalid_frame) {
+        const auto current = parser.consume(byte);
+        if (current) request = current;
+    }
+    assert(!request.has_value());
+    assert(parser.take_error()
+        == smoker::platform::BlynkProvisioningParseError::InvalidConfiguration);
+
     auto corrupt_frame = frame;
     corrupt_frame.back() ^= 0x01U;
     for (const auto byte : corrupt_frame) static_cast<void>(parser.consume(byte));
@@ -528,7 +675,9 @@ int main()
     test_status_timer_normalization_and_serializer_budget();
     test_allowlisted_deterministic_command_mapping();
     test_raw_mailbox_stop_reservation_and_concurrency();
+    test_disconnect_reconnect_boundary_discards_old_connection_state();
     test_control_is_independent_of_blynk_transport();
+    test_translated_commands_do_not_cross_reconnect_boundary();
     test_shared_ids_wrap_concurrency_and_fair_drain();
     test_results_and_events_are_separate_and_not_replayed();
     test_provisioning_blob_and_fragmented_parser();

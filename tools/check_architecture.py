@@ -1041,6 +1041,10 @@ def check_m14_history_contract(failures: CheckFailures) -> None:
 def check_m15_blynk_contract(failures: CheckFailures) -> None:
     platform = ROOT / "components/smoker_platform"
     service = (platform / "src/blynk_service.cpp").read_text()
+    connection = (platform / "src/blynk_connection_support.cpp").read_text()
+    connection_header = (
+        platform / "include/smoker/platform/blynk_connection_support.hpp"
+    ).read_text()
     commands = (platform / "src/blynk_command_support.cpp").read_text()
     command_header = (
         platform / "include/smoker/platform/blynk_command_support.hpp"
@@ -1081,11 +1085,36 @@ def check_m15_blynk_contract(failures: CheckFailures) -> None:
     callback = source_section(service, "    void mqtt_event(", "    void run()")
     failures.require(
         bool(callback)
-        and "inbound_.push(datastream, payload)" in callback
+        and "inbound_.push(" in callback
+        and "connection_boundary_.callback_connected()" in callback
+        and "connection_boundary_.callback_disconnected()" in callback
         and "is_blynk_control_datastream" not in callback
         and "submit(" not in callback
         and "heater" not in callback.lower(),
         "the MQTT callback must only perform connection bookkeeping and bounded raw-mailbox copy",
+    )
+    failures.require(
+        "disconnect_generation_" in connection_header
+        and "connection_generation_" in connection_header
+        and "result.cleanup_required" in connection
+        and "result.connection_started" in connection
+        and "if (connection.cleanup_required) handle_disconnect();\n"
+            "            if (connection.connection_started) projection_.connected();"
+            in service
+        and "disconnect_inbound_drops_.store(" in service
+        and "observed_inbound_drops_ = disconnect_inbound_drops_.load(" in service
+        and "pending_feedback_.reset();" in service
+        and "inbound.connection_generation != connection.connection_generation"
+            in service
+        and "connection.connection_generation\n                );" in service
+        and "validate_blynk_generation" in runtime,
+        "M15 disconnect cleanup and connection-generation integration are incomplete",
+    )
+    failures.require(
+        "transport_generation" in runtime_support
+        and "validate_blynk_generation(" in runtime_support
+        and "++result.discarded" in runtime_support,
+        "ControlTask must discard translated Blynk commands from stale connection generations",
     )
     failures.require(
         "constexpr std::array<std::string_view, 10U> control_datastreams" in commands
@@ -1200,7 +1229,9 @@ def check_m15_blynk_contract(failures: CheckFailures) -> None:
         "test_status_timer_normalization_and_serializer_budget",
         "test_allowlisted_deterministic_command_mapping",
         "test_raw_mailbox_stop_reservation_and_concurrency",
+        "test_disconnect_reconnect_boundary_discards_old_connection_state",
         "test_control_is_independent_of_blynk_transport",
+        "test_translated_commands_do_not_cross_reconnect_boundary",
         "test_shared_ids_wrap_concurrency_and_fair_drain",
         "test_results_and_events_are_separate_and_not_replayed",
         "test_provisioning_blob_and_fragmented_parser",

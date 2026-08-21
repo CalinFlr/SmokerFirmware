@@ -185,6 +185,13 @@ void control_task(void* const parameter)
             std::move(command_to_submit), command_correlation_id
         );
     };
+    const auto validate_blynk_generation = [](
+        const void* const service_context,
+        const std::uint32_t connection_generation
+    ) noexcept {
+        return static_cast<const BlynkService*>(service_context)
+            ->accepts_connection_generation(connection_generation);
+    };
     while (true) {
         std::uint32_t internal_correlation_id = 0U;
         bool prepare_submission_pending = false;
@@ -214,7 +221,9 @@ void control_task(void* const parameter)
             context->http_mailbox,
             context->blynk_mailbox,
             &context->application,
-            submit_to_application
+            submit_to_application,
+            &context->blynk,
+            validate_blynk_generation
         ));
         context->application.tick();
         const auto snapshot = context->application.snapshot_view();

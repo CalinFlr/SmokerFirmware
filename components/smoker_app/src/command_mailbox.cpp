@@ -6,7 +6,9 @@
 namespace smoker::app {
 
 MailboxAdmission SpscCommandMailbox::push(
-    Command command, const std::uint32_t correlation_id
+    Command command,
+    const std::uint32_t correlation_id,
+    const std::uint32_t transport_generation
 )
 {
     const bool is_stop = std::holds_alternative<StopSessionCommand>(command);
@@ -24,15 +26,20 @@ MailboxAdmission SpscCommandMailbox::push(
     if (commands_[index]) {
         commands_[index]->command = std::move(command);
         commands_[index]->correlation_id = correlation_id;
+        commands_[index]->transport_generation = transport_generation;
     } else {
-        commands_[index].emplace(TransportCommand{std::move(command), correlation_id});
+        commands_[index].emplace(TransportCommand{
+            std::move(command), correlation_id, transport_generation
+        });
     }
     write_sequence_.store(write + 1U, std::memory_order_release);
     return MailboxAdmission::Accepted;
 }
 
 bool SpscCommandMailbox::try_pop(
-    Command& command, std::uint32_t* const correlation_id
+    Command& command,
+    std::uint32_t* const correlation_id,
+    std::uint32_t* const transport_generation
 ) noexcept
 {
     const auto read = read_sequence_.load(std::memory_order_relaxed);
@@ -45,6 +52,9 @@ bool SpscCommandMailbox::try_pop(
     command = std::move(commands_[index]->command);
     if (correlation_id != nullptr) {
         *correlation_id = commands_[index]->correlation_id;
+    }
+    if (transport_generation != nullptr) {
+        *transport_generation = commands_[index]->transport_generation;
     }
     read_sequence_.store(read + 1U, std::memory_order_release);
     return true;

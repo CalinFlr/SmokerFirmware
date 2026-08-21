@@ -1000,4 +1000,13 @@ commands, and the five event types coalesce per type over the same minimum
 interval. Disconnect drops unpublished result/event state and never replays a
 Start or Install gesture.
 
+Disconnect/error occurrence is tracked separately from the final MQTT
+connected state, and every successful connection receives a nonzero generation.
+Both bounded Blynk command stages carry that generation. `BlynkTask` must apply
+disconnect cleanup before activating a newer generation, and `ControlTask`
+must discard a translated Blynk command whose generation is no longer current.
+Cleanup resets the pending Start parameter, results, already-selected feedback,
+events, and the callback-ordered inbound-drop watermark; it does not reject a
+new command received for the live reconnect generation.
+
 Status: Accepted.
