@@ -670,6 +670,17 @@ reconnect. A new live Blynk user action is required. State/configuration
 datastreams may expose current application values, but Blynk never owns the
 authoritative runtime configuration.
 
+The MQTT callback records disconnect/error occurrence independently from the
+final connected state and assigns each successful connection a nonzero bounded
+generation. Therefore a disconnect followed by reconnect between two
+`BlynkTask` polls still forces old-connection cleanup before the new connection
+is activated. Raw inputs and translated Blynk mailbox commands retain their
+origin generation; `BlynkTask` and the ControlTask-side round-robin drain drop
+stale generations. Disconnect also clears the one-shot Start parameter,
+unpublished result/feedback/event state, and acknowledges the callback-ordered
+inbound-drop watermark. A command received on the new live generation remains
+processable and a new-generation mailbox drop remains observable.
+
 The firmware-update control invokes the existing M13 check/install service.
 The Blynk payload contains no URL or binary; the platform continues to download
 the fixed public GitHub `releases/latest` asset, obtain application permission,

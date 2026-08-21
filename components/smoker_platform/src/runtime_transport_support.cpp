@@ -48,7 +48,9 @@ CommandDrainResult RoundRobinCommandDrain::drain(
     app::SpscCommandMailbox& http,
     app::SpscCommandMailbox& blynk,
     void* const submit_context,
-    const ApplicationSubmitFunction submit
+    const ApplicationSubmitFunction submit,
+    const void* const blynk_generation_context,
+    const BlynkGenerationValidator validate_blynk_generation
 ) noexcept
 {
     CommandDrainResult result{};
@@ -58,18 +60,32 @@ CommandDrainResult RoundRobinCommandDrain::drain(
 
     app::Command command{app::StopSessionCommand{}};
     std::uint32_t correlation_id = 0U;
-    while (result.submitted < external_budget_per_cycle) {
+    std::uint32_t transport_generation = 0U;
+    while (result.submitted + result.discarded < external_budget_per_cycle) {
         auto& preferred = blynk_first_ ? blynk : http;
         auto& alternate = blynk_first_ ? http : blynk;
-        bool popped = preferred.try_pop(command, &correlation_id);
+        bool from_blynk = &preferred == &blynk;
+        bool popped = preferred.try_pop(
+            command, &correlation_id, &transport_generation
+        );
         if (!popped) {
-            popped = alternate.try_pop(command, &correlation_id);
+            from_blynk = &alternate == &blynk;
+            popped = alternate.try_pop(
+                command, &correlation_id, &transport_generation
+            );
         }
         if (!popped) {
             break;
         }
 
         blynk_first_ = !blynk_first_;
+        if (from_blynk && validate_blynk_generation != nullptr
+            && !validate_blynk_generation(
+                blynk_generation_context, transport_generation
+            )) {
+            ++result.discarded;
+            continue;
+        }
         const bool is_stop =
             std::holds_alternative<app::StopSessionCommand>(command);
         static_cast<void>(submit(

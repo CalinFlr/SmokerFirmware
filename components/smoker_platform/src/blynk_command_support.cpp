@@ -167,13 +167,15 @@ std::string_view BlynkInboundCommand::payload_view() const noexcept
 
 BlynkInboundAdmission BlynkInboundMailbox::push(
     const std::string_view datastream,
-    const std::string_view payload
+    const std::string_view payload,
+    const std::uint32_t connection_generation
 ) noexcept
 {
     if (!is_blynk_control_datastream(datastream)) {
         return BlynkInboundAdmission::Ignored;
     }
-    if (datastream.empty() || datastream.size() >= blynk_datastream_capacity
+    if (connection_generation == 0U || datastream.empty()
+        || datastream.size() >= blynk_datastream_capacity
         || payload.size() >= blynk_command_payload_capacity) {
         dropped_count_.fetch_add(1U, std::memory_order_relaxed);
         return BlynkInboundAdmission::Malformed;
@@ -197,8 +199,18 @@ BlynkInboundAdmission BlynkInboundMailbox::push(
     std::memcpy(destination.payload.data(), payload.data(), payload.size());
     destination.datastream_length = static_cast<std::uint8_t>(datastream.size());
     destination.payload_length = static_cast<std::uint8_t>(payload.size());
+    destination.connection_generation = connection_generation;
     write_sequence_.store(write + 1U, std::memory_order_release);
     return BlynkInboundAdmission::Accepted;
+}
+
+std::optional<std::uint32_t>
+BlynkInboundMailbox::front_connection_generation() const noexcept
+{
+    const auto read = read_sequence_.load(std::memory_order_relaxed);
+    const auto write = write_sequence_.load(std::memory_order_acquire);
+    if (read == write) return std::nullopt;
+    return commands_[read % blynk_inbound_capacity].connection_generation;
 }
 
 bool BlynkInboundMailbox::try_pop(BlynkInboundCommand& destination) noexcept

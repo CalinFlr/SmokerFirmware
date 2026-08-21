@@ -28,10 +28,14 @@ public:
     SpscCommandMailbox& operator=(const SpscCommandMailbox&) = delete;
 
     [[nodiscard]] MailboxAdmission push(
-        Command command, std::uint32_t correlation_id = 0U
+        Command command,
+        std::uint32_t correlation_id = 0U,
+        std::uint32_t transport_generation = 0U
     );
     [[nodiscard]] bool try_pop(
-        Command& command, std::uint32_t* correlation_id = nullptr
+        Command& command,
+        std::uint32_t* correlation_id = nullptr,
+        std::uint32_t* transport_generation = nullptr
     ) noexcept;
     [[nodiscard]] std::size_t pending() const noexcept;
     [[nodiscard]] std::size_t overflow_count() const noexcept;
@@ -40,6 +44,7 @@ private:
     struct TransportCommand final {
         Command command;
         std::uint32_t correlation_id{0U};
+        std::uint32_t transport_generation{0U};
     };
 
     std::array<std::optional<TransportCommand>, capacity> commands_{};

@@ -34,6 +34,7 @@ private:
 
 struct CommandDrainResult final {
     std::size_t submitted{0U};
+    std::size_t discarded{0U};
     bool stopped_at_barrier{false};
 };
 
@@ -41,6 +42,11 @@ using ApplicationSubmitFunction = bool (*)(
     void* context,
     app::Command command,
     std::uint32_t correlation_id
+) noexcept;
+
+using BlynkGenerationValidator = bool (*)(
+    const void* context,
+    std::uint32_t connection_generation
 ) noexcept;
 
 // The application queue has sixteen entries, one reserved for Stop. Each
@@ -55,7 +61,9 @@ public:
         app::SpscCommandMailbox& http,
         app::SpscCommandMailbox& blynk,
         void* submit_context,
-        ApplicationSubmitFunction submit
+        ApplicationSubmitFunction submit,
+        const void* blynk_generation_context = nullptr,
+        BlynkGenerationValidator validate_blynk_generation = nullptr
     ) noexcept;
 
 private:

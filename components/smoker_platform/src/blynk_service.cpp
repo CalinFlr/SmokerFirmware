@@ -1,5 +1,6 @@
 #include "smoker/platform/blynk_service.hpp"
 
+#include "smoker/platform/blynk_connection_support.hpp"
 #include "smoker/platform/blynk_command_support.hpp"
 #include "smoker/platform/blynk_provisioning_support.hpp"
 #include "smoker/platform/blynk_remote_support.hpp"
@@ -118,6 +119,13 @@ public:
         }
         task_.store(task, std::memory_order_release);
         return true;
+    }
+
+    [[nodiscard]] bool accepts_connection_generation(
+        const std::uint32_t connection_generation
+    ) const noexcept
+    {
+        return connection_boundary_.accepts(connection_generation);
     }
 
 private:
@@ -243,7 +251,7 @@ private:
 
     void stop_mqtt() noexcept
     {
-        mqtt_connected_.store(false, std::memory_order_release);
+        record_disconnect();
         if (mqtt_client_ != nullptr) {
             static_cast<void>(esp_mqtt_client_stop(mqtt_client_));
             static_cast<void>(esp_mqtt_client_destroy(mqtt_client_));
@@ -261,13 +269,15 @@ private:
             const auto message_id = esp_mqtt_client_subscribe_single(
                 event->client, downlink_subscription, 0
             );
-            mqtt_connected_.store(message_id >= 0, std::memory_order_release);
-            connection_generation_.fetch_add(1U, std::memory_order_release);
+            if (message_id >= 0) {
+                static_cast<void>(connection_boundary_.callback_connected());
+            } else {
+                record_disconnect();
+            }
             return;
         }
         if (event_id == MQTT_EVENT_DISCONNECTED || event_id == MQTT_EVENT_ERROR) {
-            mqtt_connected_.store(false, std::memory_order_release);
-            connection_generation_.fetch_add(1U, std::memory_order_release);
+            record_disconnect();
             return;
         }
         if (event_id != MQTT_EVENT_DATA || event->topic == nullptr
@@ -283,7 +293,21 @@ private:
         const std::string_view payload{
             event->data, static_cast<std::size_t>(event->data_len)
         };
-        static_cast<void>(inbound_.push(datastream, payload));
+        const auto connection_generation =
+            connection_boundary_.callback_connection_generation();
+        if (connection_boundary_.accepts(connection_generation)) {
+            static_cast<void>(inbound_.push(
+                datastream, payload, connection_generation
+            ));
+        }
+    }
+
+    void record_disconnect() noexcept
+    {
+        disconnect_inbound_drops_.store(
+            inbound_.dropped_count(), std::memory_order_relaxed
+        );
+        connection_boundary_.callback_disconnected();
     }
 
     void run() noexcept
@@ -295,29 +319,23 @@ private:
         );
         start_mqtt();
         std::int64_t next_snapshot_ms = 0;
-        std::uint32_t observed_generation = connection_generation_.load(std::memory_order_acquire);
-        bool observed_connected = false;
         while (running_.load(std::memory_order_acquire)) {
             service_uart();
-            const auto generation = connection_generation_.load(std::memory_order_acquire);
-            const bool connected = mqtt_connected_.load(std::memory_order_acquire);
-            if (generation != observed_generation || connected != observed_connected) {
-                observed_generation = generation;
-                observed_connected = connected;
-                if (connected) {
-                    projection_.connected();
-                } else {
-                    handle_disconnect();
-                }
-            }
+            const auto connection = connection_boundary_.poll();
+            if (connection.cleanup_required) handle_disconnect();
+            if (connection.connection_started) projection_.connected();
 
-            if (connected) process_inbound();
+            if (connection_boundary_.usable(connection)) {
+                process_inbound(connection);
+            }
             const auto now = monotonic_ms();
             if (now >= next_snapshot_ms) {
-                observe_snapshot(connected);
+                observe_snapshot(connection_boundary_.usable(connection));
                 next_snapshot_ms = now + snapshot_period_ms;
             }
-            if (connected) publish_outbound(now);
+            if (connection_boundary_.usable(connection)) {
+                publish_outbound(now, connection);
+            }
             vTaskDelay(task_poll_ticks);
         }
         stop_mqtt();
@@ -332,9 +350,9 @@ private:
         results_.disconnected();
         events_.disconnected();
         pending_feedback_.reset();
-        BlynkInboundCommand discarded;
-        while (inbound_.try_pop(discarded)) {
-        }
+        observed_inbound_drops_ = disconnect_inbound_drops_.load(
+            std::memory_order_acquire
+        );
     }
 
     void service_uart() noexcept
@@ -405,7 +423,7 @@ private:
         ));
     }
 
-    void process_inbound() noexcept
+    void process_inbound(const BlynkConnectionSnapshot& connection) noexcept
     {
         const auto dropped = inbound_.dropped_count();
         if (dropped != observed_inbound_drops_) {
@@ -414,13 +432,27 @@ private:
         }
 
         BlynkInboundCommand inbound;
-        while (inbound_.try_pop(inbound)) {
+        while (connection_boundary_.usable(connection)) {
+            const auto front_generation = inbound_.front_connection_generation();
+            if (!front_generation) break;
+            if (*front_generation != connection.connection_generation
+                && connection_boundary_.accepts(*front_generation)) {
+                // A newer connection became active during this poll. Leave its
+                // first command for the next poll, which must run cleanup first.
+                break;
+            }
+            if (!inbound_.try_pop(inbound)) break;
+            if (inbound.connection_generation != connection.connection_generation) {
+                continue;
+            }
+            if (!connection_boundary_.usable(connection)) break;
             const bool start = inbound.datastream_view() == "CmdStart"
                 && inbound.payload_view() == "1";
             const auto session_id = start ? ids_.next_session() : 1U;
             auto mapped = mapper_.map(
                 inbound.datastream_view(), inbound.payload_view(), session_id
             );
+            if (!connection_boundary_.usable(connection)) break;
             if (mapped.decision == BlynkCommandDecision::Malformed) {
                 events_.queue(BlynkEventType::RemoteError, "malformed remote command");
                 continue;
@@ -429,7 +461,8 @@ private:
             if (mapped.command) {
                 const auto correlation = ids_.next_correlation();
                 const auto admission = application_mailbox_.push(
-                    std::move(*mapped.command), correlation
+                    std::move(*mapped.command), correlation,
+                    connection.connection_generation
                 );
                 if (admission == app::MailboxAdmission::Accepted) {
                     if (!results_.track(correlation)) {
@@ -510,12 +543,17 @@ private:
         }
     }
 
-    void publish_outbound(const std::int64_t now) noexcept
+    void publish_outbound(
+        const std::int64_t now,
+        const BlynkConnectionSnapshot& connection
+    ) noexcept
     {
         if (!pending_feedback_) pending_feedback_ = results_.pop();
         if (pending_feedback_) {
             const auto payload = serialize_blynk_command_feedback(*pending_feedback_);
-            if (publish(result_topic, payload.view())) pending_feedback_.reset();
+            if (publish(result_topic, payload.view(), connection)) {
+                pending_feedback_.reset();
+            }
         }
 
         const auto event = events_.pending_publish(now);
@@ -527,7 +565,7 @@ private:
                 static_cast<int>(code.size()), code.data()
             );
             if (written > 0 && static_cast<std::size_t>(written) < topic.size()
-                && publish(topic.data(), event->description.data())) {
+                && publish(topic.data(), event->description.data(), connection)) {
                 events_.publish_succeeded(event->type, now);
             }
         }
@@ -535,7 +573,7 @@ private:
         const auto status = projection_.pending_publish(now);
         if (status) {
             const auto payload = serialize_blynk_batch(*status);
-            if (payload && publish(status_topic, payload->view())) {
+            if (payload && publish(status_topic, payload->view(), connection)) {
                 projection_.publish_succeeded(now);
             }
         }
@@ -543,10 +581,11 @@ private:
 
     [[nodiscard]] bool publish(
         const std::string_view topic,
-        const std::string_view payload
+        const std::string_view payload,
+        const BlynkConnectionSnapshot& connection
     ) noexcept
     {
-        if (mqtt_client_ == nullptr || !mqtt_connected_.load(std::memory_order_acquire)
+        if (mqtt_client_ == nullptr || !connection_boundary_.usable(connection)
             || topic.empty() || payload.size() > blynk_payload_capacity) return false;
         return esp_mqtt_client_publish(
             mqtt_client_, topic.data(), payload.data(),
@@ -565,6 +604,7 @@ private:
     BlynkEventScheduler events_;
     BlynkProvisioningParser provisioning_parser_;
     BlynkProvisionedConfiguration configuration_{};
+    BlynkConnectionBoundary connection_boundary_;
     std::optional<BlynkCommandFeedback> pending_feedback_;
     std::optional<core::Fault> previous_fault_;
     std::optional<core::SessionId> previous_session_id_;
@@ -573,11 +613,10 @@ private:
     std::array<core::AlarmId, 16U> previous_alarm_ids_{};
     std::size_t previous_alarm_count_{0U};
     std::uint32_t observed_inbound_drops_{0U};
+    std::atomic<std::uint32_t> disconnect_inbound_drops_{0U};
     nvs_handle_t nvs_handle_{0U};
     esp_mqtt_client_handle_t mqtt_client_{nullptr};
     std::atomic_bool running_{false};
-    std::atomic_bool mqtt_connected_{false};
-    std::atomic<std::uint32_t> connection_generation_{0U};
     std::atomic<TaskHandle_t> task_{nullptr};
     bool configured_{false};
 };
@@ -601,6 +640,14 @@ BlynkService::~BlynkService() = default;
 bool BlynkService::start() noexcept
 {
     return impl_ != nullptr && impl_->start();
+}
+
+bool BlynkService::accepts_connection_generation(
+    const std::uint32_t connection_generation
+) const noexcept
+{
+    return impl_ != nullptr
+        && impl_->accepts_connection_generation(connection_generation);
 }
 
 } // namespace smoker::platform

@@ -27,6 +27,9 @@ public:
     // Starts even without a credential blob so UART0 provisioning remains
     // available. Missing/invalid credentials disable only MQTT/Blynk.
     [[nodiscard]] bool start() noexcept;
+    [[nodiscard]] bool accepts_connection_generation(
+        std::uint32_t connection_generation
+    ) const noexcept;
 
 private:
     class Impl;

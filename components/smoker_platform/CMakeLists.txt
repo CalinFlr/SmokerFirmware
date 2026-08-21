@@ -1,4 +1,5 @@
 set(smoker_platform_sources
+    "src/blynk_connection_support.cpp"
     "src/blynk_command_support.cpp"
     "src/blynk_provisioning_support.cpp"
     "src/blynk_remote_support.cpp"

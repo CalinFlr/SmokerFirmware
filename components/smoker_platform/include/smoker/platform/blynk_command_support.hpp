@@ -40,6 +40,7 @@ struct BlynkInboundCommand final {
     std::array<char, blynk_command_payload_capacity> payload{};
     std::uint8_t datastream_length{0U};
     std::uint8_t payload_length{0U};
+    std::uint32_t connection_generation{0U};
 
     [[nodiscard]] std::string_view datastream_view() const noexcept;
     [[nodiscard]] std::string_view payload_view() const noexcept;
@@ -52,9 +53,11 @@ class BlynkInboundMailbox final {
 public:
     [[nodiscard]] BlynkInboundAdmission push(
         std::string_view datastream,
-        std::string_view payload
+        std::string_view payload,
+        std::uint32_t connection_generation = 1U
     ) noexcept;
     [[nodiscard]] bool try_pop(BlynkInboundCommand& destination) noexcept;
+    [[nodiscard]] std::optional<std::uint32_t> front_connection_generation() const noexcept;
     [[nodiscard]] std::size_t pending() const noexcept;
     [[nodiscard]] std::uint32_t dropped_count() const noexcept;
 
