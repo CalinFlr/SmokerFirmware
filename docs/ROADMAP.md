@@ -15,10 +15,11 @@ A future item is **not permission to implement it early**.
   and TWDT panic/reset are recorded.
 - **M6B — external-hardware identification:** started for chamber and probe
   acquisition. MAX31865 plus a three-wire PT100 and two ADS1115 converters are
-  selected, with exact registry drivers imported. Physical modules/revisions,
-  remaining PT100 and probe-frontend facts, address straps, connectors, GPIOs,
-  and connected validation remain open. SSR, power, and independent-protection
-  hardware are still blocked on exact parts.
+  selected, with exact registry drivers imported. The final soldered MAX31865
+  assignment is SPI2/GPIO12 SCK/GPIO11 MOSI/GPIO13 MISO/GPIO10 CS. Physical
+  modules/revisions, remaining PT100 and probe-frontend facts, address straps,
+  connectors, probe GPIOs, and connected validation remain open. SSR, power,
+  and independent-protection hardware are still blocked on exact parts.
 - **M6B and M7-M10 — remaining controller product baseline:** incomplete. M7
   and M9 now have inactive host-tested/cross-buildable MAX31865 and dual-ADS1115
   software boundaries, but production remains simulated and physical activation
@@ -217,9 +218,10 @@ checklist is resolved.
 
 ## M7 — Real authoritative chamber sensor
 
-Status: **Software adapter implemented but inactive — host behavior and ESP-IDF
-6.0.2 API compatibility are validated; runtime activation, wiring, and all
-connected-sensor evidence remain blocked on the remaining M6B chamber facts.**
+Status: **Software adapter and opt-in board diagnostic implemented but inactive
+— host behavior and ESP-IDF 6.0.2 build/API compatibility are validated;
+runtime activation and all connected-sensor evidence remain blocked on the
+remaining M6B chamber facts.**
 
 Eventually replace the simulated chamber source with the real hardware adapter.
 
@@ -254,7 +256,26 @@ allowed.
 The adapter requires explicit SPI host, CS GPIO, SPI clock, fitted reference
 resistance, filter, and RTD standard. Production still composes
 `SimulatedChamberSensor`; no bus or GPIO value is present in the production
-composition.
+composition. The final target assignment is nevertheless recorded once in
+platform production code as SPI2/GPIO12 SCK/GPIO11 MOSI/GPIO13 MISO/GPIO10 CS,
+matching the maintainer-reported soldered board. This is configuration intent,
+not connected behavior.
+
+The software-only board diagnostic remains default-OFF and compiles as an
+exclusive target composition that cannot construct the normal application,
+ControlTask, or heater output. A corrected bounded mode-1 software-SPI path and
+the pinned driver both perform pull-discriminated configuration readback using
+only persistent defined bits. It then reports ten raw RTD codes, raw/reference
+ratios, and fault bits without calculating temperature. Both stages use an
+exact command-zero terminal configuration (`0x11`: AUTO/VBIAS off,
+three-wire/50 Hz) before ownership release. The normal driver path requires
+write/readback success, while bounded RAII fallbacks attempt the same cleanup
+on early returns. Software-SPI first restores idle clock and a CS-high frame
+boundary; descriptor removal still precedes bus release. Sensor
+fault samples remain distinct from SPI/shutdown failure. Separate ordinary and
+overlay builds validate the intended ordering and isolation only; the
+diagnostic has not been flashed or monitored, so physical shutdown is not
+proved.
 
 M7 remains incomplete until the chamber portion of M6B is recorded and the
 physical sensor, wiring, conversion timing, accuracy, noise, open/short faults,

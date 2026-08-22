@@ -23,6 +23,11 @@ if(ESP_PLATFORM)
         "src/max31865_target_backend.cpp"
         "src/simulation_runtime.cpp"
     )
+    if(CONFIG_SMOKER_MAX31865_CONNECTED_DIAGNOSTIC)
+        list(APPEND smoker_platform_sources
+            "src/max31865_connected_diagnostic.cpp"
+        )
+    endif()
     idf_component_register(
         SRCS ${smoker_platform_sources}
         INCLUDE_DIRS "include"

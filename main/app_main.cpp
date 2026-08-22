@@ -1,4 +1,10 @@
+#include "sdkconfig.h"
+
+#ifdef CONFIG_SMOKER_MAX31865_CONNECTED_DIAGNOSTIC
+#include "smoker/platform/max31865_connected_diagnostic.hpp"
+#else
 #include "smoker/platform/simulation_runtime.hpp"
+#endif
 
 #include "esp_log.h"
 
@@ -13,6 +19,11 @@ constexpr char tag[] = "smoker_v0";
 
 extern "C" void app_main()
 {
+#ifdef CONFIG_SMOKER_MAX31865_CONNECTED_DIAGNOSTIC
+    if (!smoker::platform::run_max31865_connected_diagnostic()) {
+        ESP_LOGE(tag, "Connected sensor diagnostic failed; heater remains absent/OFF");
+    }
+#else
     using smoker::core::Temperature;
 
     const auto ambient = Temperature::from_celsius(25.0F);
@@ -49,4 +60,5 @@ extern "C" void app_main()
     if (!smoker::platform::start_simulation_runtime(std::move(configuration))) {
         ESP_LOGE(tag, "Could not start simulation runtime; heater remains OFF");
     }
+#endif
 }

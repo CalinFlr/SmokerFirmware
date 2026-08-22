@@ -1,0 +1,2 @@
+# Explicit opt-in overlay for the software-only MAX31865 diagnostic image.
+CONFIG_SMOKER_MAX31865_CONNECTED_DIAGNOSTIC=y

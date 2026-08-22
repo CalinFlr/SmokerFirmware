@@ -918,10 +918,23 @@ def check_m7_max31865_contract(failures: CheckFailures) -> None:
     ).read_text()
     sensor = (platform / "src/max31865_sensor.cpp").read_text()
     target = (platform / "src/max31865_target_backend.cpp").read_text()
+    board_pins = (
+        platform / "include/smoker/platform/max31865_board_pins.hpp"
+    ).read_text()
+    diagnostic_header = (
+        platform / "include/smoker/platform/max31865_connected_diagnostic.hpp"
+    ).read_text()
+    diagnostic = (
+        platform / "src/max31865_connected_diagnostic.cpp"
+    ).read_text()
     platform_cmake = (platform / "CMakeLists.txt").read_text()
     runtime = (platform / "src/simulation_runtime.cpp").read_text()
     main_source = (ROOT / "main/app_main.cpp").read_text()
     tests = (ROOT / "tests/host/smoker_m7_tests.cpp").read_text()
+    diagnostic_kconfig = (ROOT / "main/Kconfig.projbuild").read_text()
+    diagnostic_defaults = (
+        ROOT / "diagnostics/max31865/sdkconfig.defaults"
+    ).read_text()
 
     lower_layer_text = "\n".join(
         path.read_text()
@@ -1076,6 +1089,122 @@ def check_m7_max31865_contract(failures: CheckFailures) -> None:
         and "Max31865TargetBackend" not in main_source,
         "production composition must remain on SimulatedChamberSensor",
     )
+
+    failures.require(
+        "max31865_spi_host = SPI2_HOST" in board_pins
+        and "max31865_sck_gpio = GPIO_NUM_12" in board_pins
+        and "max31865_mosi_gpio = GPIO_NUM_11" in board_pins
+        and "max31865_miso_gpio = GPIO_NUM_13" in board_pins
+        and "max31865_chip_select_gpio = GPIO_NUM_10" in board_pins
+        and "max31865_board_pins.hpp" in diagnostic
+        and "max31865_board_pins.hpp" in target
+        and "configuration_.spi_host == max31865_spi_host" in target
+        and "configuration_.chip_select_gpio == max31865_chip_select_gpio"
+            in target
+        and "GPIO_NUM_12" not in diagnostic
+        and "GPIO_NUM_11" not in diagnostic
+        and "GPIO_NUM_13" not in diagnostic
+        and "GPIO_NUM_10" not in diagnostic,
+        "the final soldered MAX31865 SPI2/GPIO12/11/13/10 assignment must be centralized",
+    )
+    failures.require(
+        "config SMOKER_MAX31865_CONNECTED_DIAGNOSTIC" in diagnostic_kconfig
+        and "default n" in diagnostic_kconfig
+        and "CONFIG_SMOKER_MAX31865_CONNECTED_DIAGNOSTIC=y"
+            in diagnostic_defaults
+        and "if(CONFIG_SMOKER_MAX31865_CONNECTED_DIAGNOSTIC)"
+            in platform_cmake
+        and '"src/max31865_connected_diagnostic.cpp"' in platform_cmake
+        and platform_cmake.find('"src/max31865_connected_diagnostic.cpp"')
+            > platform_cmake.find(
+                "if(CONFIG_SMOKER_MAX31865_CONNECTED_DIAGNOSTIC)"
+            )
+        and '#include "sdkconfig.h"' in main_source
+        and "#ifdef CONFIG_SMOKER_MAX31865_CONNECTED_DIAGNOSTIC"
+            in main_source
+        and "#else" in main_source
+        and "run_max31865_connected_diagnostic()" in main_source
+        and "run_max31865_connected_diagnostic()" in diagnostic_header,
+        "the MAX31865 diagnostic must remain explicit, default-OFF, target-only, and composition-exclusive",
+    )
+    failures.require(
+        "GPIO_PULLUP_ONLY" in diagnostic
+        and "GPIO_PULLDOWN_ONLY" in diagnostic
+        and "stable_configuration_bits_mask = 0xD1U" in diagnostic
+        and "idle_2wire_60hz_pattern = 0x00U" in diagnostic
+        and "idle_bias_3wire_50hz_pattern = 0x91U" in diagnostic
+        and "active_auto_3wire_50hz_pattern = 0xD1U" in diagnostic
+        and "terminal_quiescent_configuration_pattern = 0x11U"
+            in diagnostic
+        and "sample_count = 10U" in diagnostic
+        and "~SoftwareSpiPinsOwner()" in diagnostic
+        and "~SpiBusOwner()" in diagnostic
+        and "~Max31865DeviceOwner()" in diagnostic
+        and "reset_diagnostic_pins();" in diagnostic,
+        "the board diagnostic must reject pull-following MISO, use bounded persistent patterns, and retain RAII ownership",
+    )
+    software_active = diagnostic.find(
+        '"active sampling configuration",\n'
+        "            active_auto_3wire_50hz_pattern"
+    )
+    software_shutdown = diagnostic.find("if (!pins.quiesce_checked())")
+    driver_shutdown = diagnostic.find(
+        "const bool shutdown_ok = device_owner.quiesce_checked();"
+    )
+    descriptor_release = diagnostic.find("max31865_free_desc(&device_)")
+    bus_release = diagnostic.find("spi_bus_free(max31865_spi_host)")
+    device_owner = diagnostic.find("Max31865DeviceOwner device_owner;")
+    failures.require(
+        "software_write_and_verify_exact_config(" in diagnostic
+        and "quiesce_software_spi_converter(" in diagnostic
+        and "software_spi_force_idle_frame_boundary()" in diagnostic
+        and "cleanup frame boundary" in diagnostic
+        and "if (quiesced_) return true;" in diagnostic
+        and software_active >= 0
+        and software_shutdown > software_active
+        and "software-SPI destructor fallback quiescence" in diagnostic,
+        "software SPI must finish with checked exact command-zero quiescence and retain a destructor fallback",
+    )
+    failures.require(
+        "driver_write_exact_config(" in diagnostic
+        and "driver_read_exact_config(" in diagnostic
+        and "quiesce_driver_converter(" in diagnostic
+        and "max31865_set_config() RMW preservation" in diagnostic
+        and "D5, D3:D2, and D1" in diagnostic
+        and driver_shutdown > device_owner >= 0
+        and 'return transaction_errors == 0U && shutdown_ok;' in diagnostic
+        and "MAX31865 descriptor destructor fallback quiescence" in diagnostic,
+        "the driver path must use checked exact quiescence, fail on shutdown error, and retain an early-return fallback",
+    )
+    failures.require(
+        descriptor_release >= 0
+        and bus_release >= 0
+        and device_owner > bus_release
+        and "MAX31865 descriptor release failed" in diagnostic
+        and "SPI2 release failed" in diagnostic,
+        "descriptor removal must remain attempted before local SPI-bus release even when quiescence fails",
+    )
+    failures.require(
+        "sensor fault samples are distinct from SPI transaction or shutdown failure"
+            in diagnostic
+        and "RTD health" in diagnostic,
+        "sensor fault observations must remain distinct from communication/shutdown success",
+    )
+    for forbidden in (
+        "SmokerApplication",
+        "start_simulation_runtime",
+        "IHeaterOutput",
+        "max31865_read_temperature(",
+        "max31865_measure(",
+        "max31865_detect_fault_auto(",
+        "xTaskCreate",
+        "for (;;)",
+        "while (true)",
+    ):
+        failures.require(
+            forbidden not in diagnostic,
+            f"the isolated MAX31865 diagnostic must not contain {forbidden}",
+        )
 
     for evidence in (
         "test_max31865_configuration_policy_requires_explicit_valid_values",
