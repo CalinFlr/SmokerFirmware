@@ -10,8 +10,10 @@
 
 namespace smoker::platform {
 
-// SPI bus ownership/initialization and every physical value are supplied by a
-// future M6B-backed composition. This inactive integration has no defaults.
+// Bus ownership/initialization and conversion values are supplied by a future
+// M6B-backed composition. The backend accepts only the final board host/CS
+// assignment from max31865_board_pins.hpp; clock/Rref/filter/standard remain
+// explicit with no fabricated defaults.
 struct Max31865TargetConfiguration final {
     spi_host_device_t spi_host;
     gpio_num_t chip_select_gpio;

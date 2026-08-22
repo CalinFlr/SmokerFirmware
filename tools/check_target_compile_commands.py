@@ -16,6 +16,10 @@ PROJECT_SOURCE_ROOTS = (
     ROOT / "components/smoker_platform/src",
     ROOT / "main",
 )
+CONDITIONAL_SOURCES = {
+    (ROOT / "components/smoker_platform/src/max31865_connected_diagnostic.cpp").resolve():
+        "CONFIG_SMOKER_MAX31865_CONNECTED_DIAGNOSTIC",
+}
 
 
 def project_sources() -> set[Path]:
@@ -23,6 +27,20 @@ def project_sources() -> set[Path]:
     for source_root in PROJECT_SOURCE_ROOTS:
         sources.update(path.resolve() for path in source_root.glob("*.cpp"))
     return sources
+
+
+def enabled_configuration_symbols(database_path: Path) -> set[str]:
+    sdkconfig_path = database_path.parent / "sdkconfig"
+    try:
+        lines = sdkconfig_path.read_text().splitlines()
+    except OSError as error:
+        print(f"could not read {sdkconfig_path}: {error}", file=sys.stderr)
+        raise
+    return {
+        line.removesuffix("=y")
+        for line in lines
+        if line.startswith("CONFIG_") and line.endswith("=y")
+    }
 
 
 def main() -> int:
@@ -37,7 +55,15 @@ def main() -> int:
         print(f"could not read {database_path}: {error}", file=sys.stderr)
         return 1
 
+    try:
+        enabled_symbols = enabled_configuration_symbols(database_path)
+    except OSError:
+        return 1
+
     expected = project_sources()
+    for source, symbol in CONDITIONAL_SOURCES.items():
+        if symbol not in enabled_symbols:
+            expected.discard(source)
     observed: set[Path] = set()
     failures: list[str] = []
     for entry in entries:

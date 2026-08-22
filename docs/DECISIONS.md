@@ -902,8 +902,12 @@ not a completed M6B physical record or a real-sensor implementation claim. The
 selected sensor is a three-wire PT100, fixing `rtd_nominal = 100.0F` and
 `MAX31865_3WIRE` for the inactive adapter. Production continues to compose `SimulatedChamberSensor`
 until the exact breakout revision, fitted reference resistor, supply/logic
-behavior, connector, SPI host, and GPIO assignment are documented and checked
-against `CTRL-001`.
+behavior, connector, and remaining electrical facts are documented. The
+maintainer confirmed on 2026-08-22 that the final soldered production assignment
+is SPI2 with GPIO12 SCK, GPIO11 MOSI, GPIO13 MISO, and GPIO10 CS. Target code
+records that mapping once and the opt-in diagnostic consumes it, but neither
+the mapping nor a build activates the real chamber source or proves continuity,
+power, response, or electrical validity.
 
 The implementation remains a `smoker_platform` adapter behind the existing
 application-owned `IChamberSensor` port. A platform-neutral seam is host tested;
@@ -931,9 +935,39 @@ Project-owned read code contains no explicit delay, task creation, heap
 allocation, or `max31865_measure()` call. Host allocation observation and source
 inspection do not prove allocation behavior inside ESP-IDF/driver/SPI code or a
 real worst-case SPI blocking time. Filter, RTD standard, reference resistance,
-SPI host, CS GPIO, and SPI clock have no fabricated defaults. Bus ownership and
-timing, module/input-network and bias settling, fault recovery, accuracy, wiring,
+and SPI clock have no fabricated defaults. The target board host/pins are fixed
+by the confirmed soldered assignment, while bus ownership and timing,
+module/input-network and bias settling, fault recovery, accuracy, continuity,
 and physical validity remain hardware-pending and may require a later decision.
+
+The dormant connected-board diagnostic is an explicit Kconfig opt-in which is
+OFF by default and compile-time exclusive from the ordinary application/runtime
+composition. It uses a bounded datasheet-mode-1 register-response check, rejects
+MISO which follows internal pulls, compares only persistent defined
+configuration fields, calls no temperature API without fitted Rref, takes ten
+raw/fault samples, and distinguishes RTD fault observations from SPI and
+shutdown failures.
+
+The MAX31865 configuration register's D7/D6/D4/D0 fields are persistent while
+D5 (1-shot), D3:D2 (fault-cycle control), and D1 (fault clear) are commands or
+self-clearing state. Driver 1.0.8's `max31865_set_config()` read-modify-write
+clears only the persistent fields before setting their requested values, so it
+can carry command bits read from the device into a later write. The diagnostic
+does not call the driver's unbounded `max31865_detect_fault_auto()`. Its cleanup
+instead writes the exact command-zero terminal byte `0x11` and requires exact
+readback: AUTO off, VBIAS off, no 1-shot/fault-cycle/fault-clear command,
+three-wire, and 50 Hz. It first exits AUTO without changing the current filter,
+then changes to 50 Hz only while normally off when necessary.
+
+The software-SPI stage verifies that quiescent terminal state before releasing
+its pins. Its fallback restores idle SCLK and a CS-high frame boundary before
+attempting shutdown after a partial transaction. The descriptor owner provides
+checked/idempotent normal shutdown and a bounded destructor fallback on every
+early return; descriptor removal remains
+attempted after quiescence failure and precedes bus release. Failure of checked
+normal shutdown fails the diagnostic. These source/build properties are a
+buildable future procedure, not evidence that a connected converter actually
+accepted the shutdown or that connected testing occurred.
 
 Every SPI/conversion error, MAX31865 fault, non-finite value, or value rejected
 by the documented M7 validity policy becomes an absent authoritative

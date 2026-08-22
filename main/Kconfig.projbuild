@@ -1,0 +1,12 @@
+menu "Smoker controller diagnostics"
+
+config SMOKER_MAX31865_CONNECTED_DIAGNOSTIC
+    bool "Run the connected MAX31865 SPI diagnostic"
+    default n
+    help
+        Build a target-only bring-up image for the final soldered MAX31865
+        SPI wiring recorded by smoker_platform.
+        The diagnostic does not construct the normal application runtime or any
+        heater output. Keep this disabled for ordinary production builds.
+
+endmenu

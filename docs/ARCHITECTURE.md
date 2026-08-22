@@ -153,6 +153,14 @@ clock, fitted reference resistance, filter, and RTD standard; it supplies no
 fabricated defaults. PT100 nominal 100 ohm and three-wire are the only fixed
 physical choices currently supported by the adapter.
 
+The final soldered controller assignment is a separate target-platform fact
+shared by bring-up and future production composition: SPI2, GPIO12 SCK, GPIO11
+MOSI, GPIO13 MISO, and GPIO10 CS. The maintainer reported that assignment on
+2026-08-22. Recording it in `max31865_board_pins.hpp` does not initialize the
+bus or establish module power, continuity, response, fitted Rref, or validity.
+The backend still receives its complete configuration explicitly when a future
+composition is authorized.
+
 Initialization acquires the real 1.0.8 descriptor and configures bias plus
 `MAX31865_MODE_AUTO`, but reports `ConfiguredAwaitingFirstSample`, not sample
 readiness. The MAX31865 RTD registers reset to zero, which driver 1.0.8 can
@@ -172,6 +180,35 @@ latency. Continuous conversion is provisional. SPI-bus ownership and timing,
 module/input-network and bias settling, wiring, accuracy, noise, fault recovery,
 and sustained physical behavior remain gated on M6B facts and connected M7
 tests.
+
+An additional target-only connected-board diagnostic is compiled only when
+`CONFIG_SMOKER_MAX31865_CONNECTED_DIAGNOSTIC` is explicitly enabled; Kconfig
+defaults it OFF. Its `app_main` branch is compile-time exclusive from the
+ordinary runtime and never constructs `SmokerApplication`, `ControlTask`, or a
+heater output. It first exercises a bounded mode-1 software-SPI register path
+with datasheet timing margins, then cross-checks the pinned 1.0.8 driver. Both
+paths reject MISO data that changes with internal pull-up/pull-down and use only
+defined persistent configuration bits for complementary readback. The
+diagnostic reports a finite set of raw RTD codes, `RRTD/RREF` ratios, and fault
+bits, never temperature. Before either SPI implementation releases CS, bus, or
+GPIO ownership, it writes and reads back an exact terminal configuration with
+AUTO, VBIAS, 1-shot, fault-cycle, and fault-clear commands all zero. The
+terminal `0x11` retains three-wire/50 Hz selection while leaving the converter
+normally off and unbiased.
+
+Driver 1.0.8's configuration setter is a read-modify-write which clears only
+the persistent D7/D6/D4/D0 fields and can preserve self-clearing D5, D3:D2, and
+D1. Diagnostic shutdown therefore uses an exact raw configuration transaction,
+not that setter. The normal driver path performs checked, idempotent quiescence;
+both software-SPI pin ownership and driver descriptor ownership retain bounded
+destructor fallbacks for early returns. The software fallback first forces
+mode-1 idle and a CS-high frame boundary so a shutdown write cannot append to
+a partially failed transfer. Descriptor removal is attempted even after a
+shutdown failure and occurs before `spi_bus_free()`. A normal-path
+shutdown write/readback failure makes the diagnostic fail. Source/build
+evidence proves this intended cleanup sequence only; without executing the
+connected diagnostic it does not prove that a physical converter became
+quiescent.
 
 ### Inactive M9 dual-ADS1115 boundary
 

@@ -1,5 +1,7 @@
 #include "smoker/platform/max31865_target_backend.hpp"
 
+#include "smoker/platform/max31865_board_pins.hpp"
+
 #include "esp_err.h"
 
 namespace smoker::platform {
@@ -143,9 +145,8 @@ void Max31865TargetBackend::clear_fault_for_later_read() noexcept
 
 bool Max31865TargetBackend::valid_configuration() const noexcept
 {
-    const bool valid_host = configuration_.spi_host == SPI2_HOST
-        || configuration_.spi_host == SPI3_HOST;
-    return valid_host
+    return configuration_.spi_host == max31865_spi_host
+        && configuration_.chip_select_gpio == max31865_chip_select_gpio
         && GPIO_IS_VALID_OUTPUT_GPIO(configuration_.chip_select_gpio)
         && configuration_.clock_speed_hz > 0U
         && configuration_.clock_speed_hz <= MAX31865_MAX_CLOCK_SPEED_HZ
