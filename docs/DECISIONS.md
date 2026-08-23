@@ -857,31 +857,83 @@ Status: Accepted.
 
 ## D055 — M8 uses Espressif's official PID component behind a platform adapter
 
-M8 will use the official ESP Component Registry component
-`espressif/pid_ctrl`. The currently reviewed release is `0.3.1`, which declares
-ESP-IDF `>=4.4` compatibility and therefore covers the project's pinned
-ESP-IDF `6.0.2` baseline. It is a registry component maintained by Espressif,
-not a component bundled directly in the ESP-IDF `6.0.2` source tree.
+M8 uses the official ESP Component Registry component `espressif/pid_ctrl`
+exactly at reviewed version 0.3.1, component hash
+`974be0666bb4d95f49677327dd8305781d04d8bae284fdde2fbadf06ca9d4979`.
+It declares ESP-IDF `>=4.4`, covering the pinned ESP-IDF 6.0.2 baseline, and is
+maintained by Espressif rather than bundled in that IDF source tree. Its
+mandatory transitive `espressif/iqmath` 1.11.0~1 component is locked at
+`39448db759b410373e543798167ca4670bbff3019cb290a2fe8e627221e71b9d`.
+An unreviewed floating upgrade is forbidden.
 
-The dependency is not added before M8. At implementation time it must be pinned
-to the exact reviewed version and recorded with its registry hash in
-`dependencies.lock`; an unreviewed floating upgrade is forbidden. Backend,
-positional/incremental form, sample period, gains, integral/output limits, and
-SSR window are selected from real M6B/M7/M8 hardware evidence rather than the
-M2 simulation.
+Reviewed 0.3.1 provides float and IQmath numeric backends and both positional
+and incremental calculation forms. The first inactive slice selects the float
+API because the existing `Temperature` and `HeaterDemand` boundary is float and
+ESP-IDF 6.0.2 identifies ESP32-S3 as having a single-precision hardware FPU.
+This is a numeric-interface selection, not approval of a calculation form or
+physical tuning. Form, gains, common output limits, positional accumulated-error
+bounds, call cadence, and SSR window remain explicit and require real
+M6B/M7/M8 evidence.
 
-Because the component includes ESP-IDF types, it remains in a
-`smoker_platform` PID adapter behind an application-owned port. `smoker_core`
-stays pure platform-independent C++, and `SmokerApplication`/`ControlTask`
-remains the only caller and runtime-state writer. The adapter creates no task;
-its compute call is synchronous, bounded, free of I/O and repeated allocation,
-and returns only normalized `0..100%` demand.
+Reviewed positional form accumulates raw per-call error, clamps that accumulator
+to `min_integral`/`max_integral`, multiplies it by Ki, and differentiates error.
+Reviewed incremental form never reads those accumulator/bound fields; it adds
+per-call error changes to `last_output` and clamps the retained output instead.
+Project configuration therefore requires finite ordered accumulated-error
+bounds containing zero only for positional form and rejects them for incremental
+form. The target adapter maps the upstream incremental-only ignored fields to
+`0/0` deterministically.
 
-The synchronous safety gate is applied after PID computation and may always
-replace its result with OFF. Boot, Stop, missing target, invalid authoritative
-measurement, and fault paths must leave heating OFF and reset/disable latent
-controller state before a later explicit Start. Electrical SSR windowing stays
-in the heater-output adapter and is not delegated to PID.
+The API takes an error per call and has no sample-period/delta-time parameter,
+so both forms use implicit per-call gains. Both differentiate error, and the
+component provides neither derivative filtering nor derivative-on-measurement.
+Because the project passes target minus measured, a target step can create
+derivative kick; form selection and mitigation require real activation/tuning
+evidence. It also provides neither autotuning nor plant identification.
+`pid_ctrl` is the runtime engine; automatic tuning is a separate future decision
+which cannot be selected or tested safely before the real chamber sensor,
+SSR/heater, smoker thermal plant, and independent cutoff are available and
+validated. No form, coefficient, or simulated tuning result is production
+approved.
+
+Because the component includes ESP-IDF types, its real backend remains
+target-only in `smoker_platform` behind application-owned `IChamberController`.
+The host-testable adapter fixes error direction as target minus measured and
+rejects backend failure, non-finite output, and output outside configured
+normalized 0..100% bounds. `smoker_core` stays platform-independent, and
+`SmokerApplication`/`ControlTask` remains the only caller and runtime-state
+writer. Production explicitly composes a deterministic adapter around the
+existing M2 100/0 controller; the PID adapter is compiled but not composed.
+
+The target float backend is non-copyable RAII and exercises the exact
+`pid_new_control_block_f()`, `pid_compute_f()`,
+`pid_reset_ctrl_block_f()`, and `pid_del_control_block_f()` APIs. Reviewed
+creation uses `calloc()` and is restricted to initialization before the
+critical task starts. Valid upstream compute/reset and project request/reset
+paths intentionally allocate nothing and perform no I/O, delay, wait, logging,
+locking, or task creation.
+
+The synchronous safety evaluation and gate occur after requested-demand
+computation and may always replace it with OFF before the sole final heater
+write. Application construction issues observable heater OFF before its first
+controller reset, without claiming to replace safe initialization in a future
+real output driver. Boot, IDLE, STOPPED, manual Stop, an effectively missing
+target, invalid authoritative measurement, active fault, and firmware-update
+interlocks leave heating OFF and reset/disable latent controller state. Reset
+is a bounded critical-path operation with the same no-I/O/wait/task/allocation
+contract as request. Application-owned reset failures are reported;
+`PidChamberController` has no ignored destructor reset, while its target backend
+still releases the owned control block through RAII. Compute/reset failure fails
+closed and latches `ControlLoopFailure`. A later successful reset only makes
+explicit fault clear possible; clear leaves the session stopped, so a new
+explicit Start is required. Electrical SSR output/windowing stays separate and
+is absent from this slice.
+
+The ordinary command batch uses final-state semantics except where a rule
+defines a barrier. Target removal followed by restoration in one tick therefore
+does not create an intermediate OFF/reset cycle: RR-003 governs an absent target
+at control evaluation, while SR-003/D031 explicitly reserve that boundary for
+an accepted manual Stop.
 
 Status: Accepted.
 

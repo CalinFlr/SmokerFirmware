@@ -1,6 +1,5 @@
 #include "smoker/app/smoker_application.hpp"
 
-#include "smoker/core/control.hpp"
 #include "smoker/core/safety.hpp"
 #include "smoker/core/timer.hpp"
 
@@ -13,6 +12,7 @@ namespace smoker::app {
 SmokerApplication::SmokerApplication(
     IChamberSensor& chamber_sensor,
     IFoodProbeSource& food_probe_source,
+    IChamberController& chamber_controller,
     IHeaterOutput& heater_output,
     IClock& clock,
     IEventSink& event_sink,
@@ -21,6 +21,7 @@ SmokerApplication::SmokerApplication(
 )
     : chamber_sensor_{chamber_sensor}
     , food_probe_source_{food_probe_source}
+    , chamber_controller_{chamber_controller}
     , heater_output_{heater_output}
     , clock_{clock}
     , event_sink_{event_sink}
@@ -56,7 +57,12 @@ SmokerApplication::SmokerApplication(
 
     refresh_snapshot_view_cache();
 
+    // Establish the application-visible OFF command before the first
+    // controller callback. A future real heater-output driver must still own
+    // safe electrical initialization before application construction.
     heater_output_.write(core::HeaterDemand::off());
+    controller_fault_resolved_ = reset_chamber_controller();
+    controller_failure_pending_ = !controller_fault_resolved_;
     event_sink_.publish(core::Event{
         core::EventType::DeviceBooted,
         clock_.now(),
@@ -119,7 +125,6 @@ void SmokerApplication::tick()
     process_pending_commands(now);
     evaluate_probe_states(now);
     update_active_timer(now);
-    evaluate_safety(now);
 
     session_elapsed_ = core::Duration{};
     if (session_) {
@@ -130,10 +135,53 @@ void SmokerApplication::tick()
     }
 
     core::HeaterDemand requested_demand = core::HeaterDemand::off();
-    if (session_ && session_->status == core::SessionStatus::Running) {
-        requested_demand = core::calculate_heater_demand(
-            chamber_temperature_, session_->active_chamber_target
+    const bool controller_fault_is_latched = active_fault_
+        && active_fault_->code == core::FaultCode::ControlLoopFailure;
+    if ((controller_failure_pending_ || controller_fault_is_latched)
+        && !controller_fault_resolved_) {
+        controller_fault_resolved_ = reset_chamber_controller();
+    }
+    if (controller_is_eligible()) {
+        const auto request = chamber_controller_.request(
+            *chamber_temperature_, *session_->active_chamber_target
         );
+        if (request) {
+            requested_demand = *request;
+            controller_active_ = true;
+            controller_fault_resolved_ = false;
+        } else {
+            controller_failure_pending_ = true;
+            controller_active_ = false;
+            controller_fault_resolved_ = reset_chamber_controller();
+        }
+    } else if (controller_active_) {
+        controller_active_ = false;
+        controller_fault_resolved_ = reset_chamber_controller();
+        if (!controller_fault_resolved_) {
+            controller_failure_pending_ = true;
+        }
+    }
+
+    // The controller produces only a request. Safety is evaluated after that
+    // computation and remains authoritative before the sole final write.
+    evaluate_safety(now);
+
+    // A safety fault can make a controller ineligible after its request was
+    // calculated in this cycle. Clear latent state before commanding OFF.
+    if (controller_active_ && !controller_is_eligible()) {
+        controller_active_ = false;
+        controller_fault_resolved_ = reset_chamber_controller();
+        if (!controller_fault_resolved_) {
+            controller_failure_pending_ = true;
+        }
+    }
+
+    // Do not replace a more authoritative fault. A controller failure masked
+    // by one remains pending and prevents another request until it can be
+    // latched explicitly as ControlLoopFailure.
+    if (!active_fault_ && controller_failure_pending_) {
+        raise_fault(core::FaultCode::ControlLoopFailure, now);
+        controller_failure_pending_ = false;
     }
 
     heater_demand_ = core::apply_safety_gate(
@@ -490,6 +538,7 @@ bool SmokerApplication::fault_condition_is_resolved(const core::FaultCode code) 
         return chamber_temperature_
             && *chamber_temperature_ <= safety_limits_.maximum_chamber_temperature;
     case core::FaultCode::ControlLoopFailure:
+        return controller_fault_resolved_;
     case core::FaultCode::ConfigurationInvalid:
         return false;
     }
@@ -646,6 +695,23 @@ void SmokerApplication::evaluate_safety(const core::MonotonicTimePoint now)
     if (evaluation.fault_code) {
         raise_fault(*evaluation.fault_code, now);
     }
+}
+
+bool SmokerApplication::controller_is_eligible() const noexcept
+{
+    return configuration_valid_
+        && !active_fault_
+        && !controller_failure_pending_
+        && !firmware_update_active_
+        && session_
+        && session_->status == core::SessionStatus::Running
+        && chamber_temperature_.has_value()
+        && session_->active_chamber_target.has_value();
+}
+
+bool SmokerApplication::reset_chamber_controller() noexcept
+{
+    return chamber_controller_.reset();
 }
 
 void SmokerApplication::raise_fault(

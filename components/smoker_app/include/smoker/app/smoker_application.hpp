@@ -19,6 +19,7 @@ public:
     SmokerApplication(
         IChamberSensor& chamber_sensor,
         IFoodProbeSource& food_probe_source,
+        IChamberController& chamber_controller,
         IHeaterOutput& heater_output,
         IClock& clock,
         IEventSink& event_sink,
@@ -89,6 +90,8 @@ private:
     void evaluate_probe_state(ProbeRuntime& probe, core::MonotonicTimePoint now);
     void update_active_timer(core::MonotonicTimePoint now);
     void evaluate_safety(core::MonotonicTimePoint now);
+    [[nodiscard]] bool controller_is_eligible() const noexcept;
+    [[nodiscard]] bool reset_chamber_controller() noexcept;
     void raise_fault(core::FaultCode code, core::MonotonicTimePoint now);
     void stop_running_session(core::StopReason reason, core::MonotonicTimePoint now);
     core::AlarmId raise_alarm(
@@ -112,6 +115,7 @@ private:
 
     IChamberSensor& chamber_sensor_;
     IFoodProbeSource& food_probe_source_;
+    IChamberController& chamber_controller_;
     IHeaterOutput& heater_output_;
     IClock& clock_;
     IEventSink& event_sink_;
@@ -131,6 +135,9 @@ private:
     core::AlarmId next_alarm_id_{1U};
     bool configuration_valid_{true};
     bool firmware_update_active_{false};
+    bool controller_active_{false};
+    bool controller_fault_resolved_{false};
+    bool controller_failure_pending_{false};
     core::Duration session_elapsed_{};
 
     std::array<std::optional<QueuedCommand>, command_capacity> commands_{};

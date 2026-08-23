@@ -1,5 +1,7 @@
 #include "smoker/platform/simulated_adapters.hpp"
 
+#include "smoker/core/control.hpp"
+
 #include <algorithm>
 
 namespace smoker::platform {
@@ -77,6 +79,19 @@ bool SimulatedFoodProbeSource::set_reading(
     }
 
     entry->reading = reading;
+    return true;
+}
+
+std::optional<core::HeaterDemand> DeterministicChamberController::request(
+    const core::Temperature chamber_temperature,
+    const core::Temperature chamber_target
+) noexcept
+{
+    return core::calculate_heater_demand(chamber_temperature, chamber_target);
+}
+
+bool DeterministicChamberController::reset() noexcept
+{
     return true;
 }
 

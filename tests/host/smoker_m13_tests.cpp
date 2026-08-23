@@ -54,12 +54,14 @@ void test_application_update_permission(TestContext& context)
     };
     smoker::platform::SimulatedChamberSensor chamber{temperature(25.0F)};
     smoker::platform::SimulatedFoodProbeSource probe_source{probes};
+    smoker::platform::DeterministicChamberController chamber_controller;
     smoker::platform::SimulatedHeaterOutput heater;
     smoker::platform::SimulatedClock clock;
     smoker::platform::SimulatedEventSink events;
     smoker::app::SmokerApplication application{
         chamber,
         probe_source,
+        chamber_controller,
         heater,
         clock,
         events,

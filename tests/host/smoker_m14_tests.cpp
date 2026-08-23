@@ -690,12 +690,14 @@ void test_control_output_is_independent_of_history_saturation(TestContext& conte
     };
     smoker::platform::SimulatedChamberSensor chamber{temperature(25.0F)};
     smoker::platform::SimulatedFoodProbeSource probe_source{probes};
+    smoker::platform::DeterministicChamberController chamber_controller;
     smoker::platform::SimulatedHeaterOutput heater;
     smoker::platform::SimulatedClock clock;
     smoker::platform::SimulatedEventSink events;
     smoker::app::SmokerApplication application{
         chamber,
         probe_source,
+        chamber_controller,
         heater,
         clock,
         events,

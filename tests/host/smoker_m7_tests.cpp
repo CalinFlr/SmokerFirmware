@@ -472,12 +472,14 @@ void test_max31865_premature_application_tick_latches_fault_and_heater_off()
         },
     };
     smoker::platform::SimulatedFoodProbeSource food_source{probes};
+    smoker::platform::DeterministicChamberController chamber_controller;
     smoker::platform::SimulatedHeaterOutput heater;
     smoker::platform::SimulatedClock clock;
     smoker::platform::SimulatedEventSink events;
     smoker::app::SmokerApplication application{
         sensor,
         food_source,
+        chamber_controller,
         heater,
         clock,
         events,

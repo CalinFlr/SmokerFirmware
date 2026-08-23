@@ -51,6 +51,18 @@ private:
     std::vector<Entry> entries_;
 };
 
+// Production's inactive-M8 composition deliberately retains the M2 behavior:
+// request 100% below target and 0% at/above it. This adapter keeps that policy
+// behind the same application port as the compiled-but-inactive PID adapter.
+class DeterministicChamberController final : public app::IChamberController {
+public:
+    [[nodiscard]] std::optional<core::HeaterDemand> request(
+        core::Temperature chamber_temperature,
+        core::Temperature chamber_target
+    ) noexcept override;
+    [[nodiscard]] bool reset() noexcept override;
+};
+
 class SimulatedHeaterOutput final : public app::IHeaterOutput {
 public:
     SimulatedHeaterOutput();

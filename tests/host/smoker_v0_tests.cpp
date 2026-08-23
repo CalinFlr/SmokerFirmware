@@ -222,9 +222,11 @@ public:
         : probes{probe_configuration()}
         , chamber{temperature(20.0F)}
         , food_source{probes}
+        , chamber_controller{}
         , application{
               chamber,
               food_source,
+              chamber_controller,
               heater,
               clock,
               events,
@@ -244,6 +246,7 @@ public:
     std::array<FoodProbeConfig, 2U> probes;
     smoker::platform::SimulatedChamberSensor chamber;
     smoker::platform::SimulatedFoodProbeSource food_source;
+    smoker::platform::DeterministicChamberController chamber_controller;
     smoker::platform::SimulatedHeaterOutput heater;
     smoker::platform::SimulatedClock clock;
     smoker::platform::SimulatedEventSink events;
@@ -1359,12 +1362,14 @@ void test_m5_validation_queue_and_combined_order(TestContext& context)
         std::array<FoodProbeConfig, 0U> no_probes{};
         smoker::platform::SimulatedChamberSensor chamber{temperature(20.0F)};
         smoker::platform::SimulatedFoodProbeSource food_source{no_probes};
+        smoker::platform::DeterministicChamberController chamber_controller;
         smoker::platform::SimulatedHeaterOutput heater;
         smoker::platform::SimulatedClock clock;
         smoker::platform::SimulatedEventSink events;
         SmokerApplication application{
             chamber,
             food_source,
+            chamber_controller,
             heater,
             clock,
             events,
@@ -1386,12 +1391,14 @@ void test_m5_validation_queue_and_combined_order(TestContext& context)
         duplicate_probes[1].id = duplicate_probes[0].id;
         smoker::platform::SimulatedChamberSensor chamber{temperature(20.0F)};
         smoker::platform::SimulatedFoodProbeSource food_source{duplicate_probes};
+        smoker::platform::DeterministicChamberController chamber_controller;
         smoker::platform::SimulatedHeaterOutput heater;
         smoker::platform::SimulatedClock clock;
         smoker::platform::SimulatedEventSink events;
         SmokerApplication application{
             chamber,
             food_source,
+            chamber_controller,
             heater,
             clock,
             events,
