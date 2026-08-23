@@ -223,6 +223,10 @@ Ads1115FoodProbeSource::Ads1115FoodProbeSource(
 {
     configured_ = valid_ads1115_acquisition_configuration(configuration_)
         && backend_.initialize(configuration_.devices());
+    // set_mode() is a read-modify-write and cannot prove that an externally
+    // powered converter is idle after an MCU-only reset. Each physical device
+    // must independently observe OS=ready before it may be configured.
+    device_states_.fill(DeviceState::Unsynchronized);
 }
 
 void Ads1115FoodProbeSource::service() noexcept
@@ -262,33 +266,66 @@ void Ads1115FoodProbeSource::start_next_conversion() noexcept
 {
     active_channel_ = next_channel_;
     const auto& channel = configuration_.channels()[active_channel_];
-    if (!backend_.configure_channel(channel)
-        || !backend_.start_conversion(channel.device_index)) {
-        fail_active_probe();
+    auto& device_state = device_states_[channel.device_index];
+
+    if (device_state == DeviceState::Unsynchronized) {
+        bool busy = true;
+        if (!backend_.conversion_busy(channel.device_index, busy) || busy) {
+            advance_to_next_channel();
+            return;
+        }
+
+        // Any result left by a conversion started before initialization is
+        // deliberately discarded. Recovery is its own service step.
+        device_state = DeviceState::Idle;
         return;
     }
+
+    if (!backend_.configure_channel(channel)) {
+        // Pinned driver 1.1.14 clears OS in every non-OS configuration write,
+        // so configuration cannot start a conversion on this known-idle ADC.
+        invalidate_active_probe();
+        advance_to_next_channel();
+        return;
+    }
+    if (!backend_.start_conversion(channel.device_index)) {
+        invalidate_active_probe();
+        device_state = DeviceState::Unsynchronized;
+        advance_to_next_channel();
+        return;
+    }
+
+    // Only a successful start establishes a meaningful deadline.
     conversion_deadline_ = clock_.now() + configuration_.conversion_timeout();
+    device_state = DeviceState::Converting;
     state_ = AcquisitionState::Converting;
 }
 
 void Ads1115FoodProbeSource::poll_active_conversion() noexcept
 {
     const auto& channel = configuration_.channels()[active_channel_];
-    if (clock_.now() >= conversion_deadline_) {
-        fail_active_probe();
-        return;
-    }
+    auto& device_state = device_states_[channel.device_index];
 
     bool busy = true;
     if (!backend_.conversion_busy(channel.device_index, busy)) {
-        fail_active_probe();
+        quarantine_active_device();
         return;
     }
-    if (busy) return;
+    if (busy) {
+        if (clock_.now() < conversion_deadline_) return;
+        quarantine_active_device();
+        return;
+    }
+
+    // OS=ready proves the converter is idle. Polling time cannot reveal when
+    // the conversion completed, so a ready result remains valid at or after
+    // the monotonic stuck deadline.
+    device_state = DeviceState::Idle;
 
     std::int16_t raw_value = 0;
     if (!backend_.get_value(channel.device_index, raw_value)) {
-        fail_active_probe();
+        invalidate_active_probe();
+        advance_after_active_conversion();
         return;
     }
 
@@ -301,15 +338,27 @@ void Ads1115FoodProbeSource::poll_active_conversion() noexcept
     advance_after_active_conversion();
 }
 
-void Ads1115FoodProbeSource::fail_active_probe() noexcept
+void Ads1115FoodProbeSource::invalidate_active_probe() noexcept
 {
     samples_[active_channel_].reset();
+}
+
+void Ads1115FoodProbeSource::quarantine_active_device() noexcept
+{
+    invalidate_active_probe();
+    const auto device_index = configuration_.channels()[active_channel_].device_index;
+    device_states_[device_index] = DeviceState::Unsynchronized;
     advance_after_active_conversion();
+}
+
+void Ads1115FoodProbeSource::advance_to_next_channel() noexcept
+{
+    next_channel_ = (active_channel_ + 1U) % configuration_.channels().size();
 }
 
 void Ads1115FoodProbeSource::advance_after_active_conversion() noexcept
 {
-    next_channel_ = (active_channel_ + 1U) % configuration_.channels().size();
+    advance_to_next_channel();
     state_ = AcquisitionState::Idle;
 }
 

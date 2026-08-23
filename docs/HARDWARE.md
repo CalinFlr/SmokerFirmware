@@ -224,6 +224,7 @@ implementation:
 | ESP-IDF 6 build path | locked `i2cdev` selects ESP-IDF 6's new `i2c_master` driver | **CONFIRMED FROM CONFIG** — fresh ESP32-S3 configure/build output |
 | Conversion timing | Conversion time is `1 / DR`; nominal data rates vary by +/-10%; single-shot power-up is approximately 25 us | **CONFIRMED FROM DOCUMENTATION** — TI ADS1115 Rev. E sections 5.5, 7.3.6, and 7.4.2.1 |
 | Descriptor initialization | `ads111x_init_desc()` writes a driver-owned 1 MHz clock into `i2c_dev_t` before creating its mutex | **CONFIRMED FROM DOCUMENTATION** — pinned 1.1.14 source |
+| Configuration/start boundary | mode/mux/gain/rate setters are read-modify-write operations; non-OS `write_conf_bits()` writes explicitly clear OS, while only the OS setter starts a single-shot conversion | **CONFIRMED FROM DOCUMENTATION** — exact pinned 1.1.14 source |
 | Locked I2C behavior | first I/O lazily creates port/device state; mutex and I/O calls use `CONFIG_I2CDEV_TIMEOUT`; retry paths contain `vTaskDelay()` and may recreate device handles | **CONFIRMED FROM DOCUMENTATION** — pinned `i2cdev` 2.1.2 source |
 | Current firmware use | inactive adapter and real API backend compile; production continues to compose `SimulatedFoodProbeSource` | **CONFIRMED FROM CONFIG** — focused host tests and ESP-IDF 6.0.2 cross-build only |
 
@@ -234,11 +235,21 @@ choice is made by importing the driver.
 
 The inactive M9 adapter remains in `smoker_platform` behind the existing
 `IFoodProbeSource` port and creates no sensor task. One owner sequences both
-descriptors and all mapped channels. A service step configures an explicit
-mux/gain/rate, starts one single-shot conversion, and returns; a later step
-checks the monotonic stuck deadline and busy state before reading the same
-conversion. `read(probe_id)` performs no I2C and returns only an independently
-timestamped cache entry before its configured maximum age expires.
+descriptors and all mapped channels, with independent synchronization/
+quarantine state per physical ADC. Each device first requires a successful
+`busy=false` observation, which discards any conversion result surviving an
+MCU-only reset without configuring or restarting in that service step. An
+unknown/busy device is skipped so the other converter can progress.
+
+A later service step configures explicit mux/gain/rate, starts one single-shot
+conversion, and only then establishes its deadline. Active polling observes
+busy first: ready is read even at/after the deadline, while still busy at/after
+the deadline, a busy-read error, or a failed start quarantines that ADC. The
+abandoned result is discarded rather than read or reassigned. A value-read
+failure after ready, configuration failure on a synchronized idle device, and
+calibration/validity rejection remain probe-local. `read(probe_id)` performs no
+I2C and returns only an independently timestamped cache entry before its
+configured maximum age expires.
 
 Raw codes enter a mandatory injected calibration/validity policy. The adapter
 contains no physical conversion defaults. Configuration requires the I2C port,
@@ -254,9 +265,9 @@ creation, or steady-state allocation. That does not remove locked `i2cdev`'s
 mutex waits, transaction timeouts, lazy setup, internal retry delays, or
 possible driver/ESP-IDF allocation. The inactive adapter is therefore not yet
 approved for ControlTask placement. Production neither calls `i2cdev_init()`
-nor constructs it. An I2C/conversion/calibration/validity failure clears only
-the affected monitoring sample; BR-005/SF-008 keep chamber control and heater
-demand unchanged.
+nor constructs it. Failures clear only the affected monitoring sample; only
+ambiguous device state adds quarantine, and BR-005/SF-008 keep chamber control
+and heater demand unchanged.
 
 ### Physical facts still required before runtime activation or pin assignment
 

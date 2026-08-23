@@ -1236,6 +1236,12 @@ def check_m9_ads1115_contract(failures: CheckFailures) -> None:
     runtime = (platform / "src/simulation_runtime.cpp").read_text()
     main_source = (ROOT / "main/app_main.cpp").read_text()
     tests = (ROOT / "tests/host/smoker_m9_tests.cpp").read_text()
+    pinned_driver_path = (
+        ROOT / "managed_components/esp-idf-lib__ads111x/ads111x.c"
+    )
+    pinned_driver = (
+        pinned_driver_path.read_text() if pinned_driver_path.is_file() else None
+    )
 
     lower_layer_text = "\n".join(
         path.read_text()
@@ -1262,8 +1268,11 @@ def check_m9_ads1115_contract(failures: CheckFailures) -> None:
         and "class IAds1115SampleConverter" in source_header
         and "void service() noexcept;" in source_header
         and "std::vector<std::optional<CachedSample>> samples_" in source_header
+        and "enum class DeviceState" in source_header
+        and "Unsynchronized" in source_header
+        and "std::array<DeviceState, 2U> device_states_" in source_header
         and "AcquisitionState state_" in source_header,
-        "M9 must retain one host-testable acquisition owner with timestamped caches",
+        "M9 must retain one host-testable acquisition owner with timestamped caches and per-device state",
     )
     failures.require(
         all(
@@ -1320,28 +1329,49 @@ def check_m9_ads1115_contract(failures: CheckFailures) -> None:
     poll_section = source_section(
         source,
         "void Ads1115FoodProbeSource::poll_active_conversion()",
-        "void Ads1115FoodProbeSource::fail_active_probe()",
+        "void Ads1115FoodProbeSource::invalidate_active_probe()",
     )
     failures.require(
         bool(start_section)
+        and "device_state == DeviceState::Unsynchronized" in start_section
+        and start_section.find("backend_.conversion_busy(channel.device_index, busy)")
+            < start_section.find("backend_.configure_channel(channel)")
         and "backend_.configure_channel(channel)" in start_section
         and "backend_.start_conversion(channel.device_index)" in start_section
+        and start_section.find("backend_.start_conversion(channel.device_index)")
+            < start_section.find("conversion_deadline_ = clock_.now()")
+        and "device_state = DeviceState::Unsynchronized" in start_section
         and "backend_.get_value" not in start_section
         and bool(poll_section)
-        and poll_section.find("clock_.now() >= conversion_deadline_")
-            < poll_section.find("backend_.conversion_busy(")
         and poll_section.find("backend_.conversion_busy(")
-            < poll_section.find("if (busy) return")
+            < poll_section.find("clock_.now() < conversion_deadline_")
+        and poll_section.find("clock_.now() < conversion_deadline_")
             < poll_section.find("backend_.get_value(")
         and poll_section.find("backend_.get_value(")
             < poll_section.find("sample_converter_.convert("),
-        "M9 must start and later poll/read/calibrate the same explicit channel in order",
+        "M9 must synchronize before start, calculate the deadline after start, and observe busy before deadline/read/calibration",
     )
     failures.require(
-        "samples_[active_channel_].reset();" in source
+        "device_states_.fill(DeviceState::Unsynchronized);" in source
+        and "device_state = DeviceState::Idle;\n        return;" in start_section
+        and "void Ads1115FoodProbeSource::quarantine_active_device()" in source
+        and "samples_[active_channel_].reset();" in source
+        and "device_states_[device_index] = DeviceState::Unsynchronized;" in source
+        and poll_section.count("quarantine_active_device();") >= 2
+        and "device_state = DeviceState::Idle;" in poll_section
+        and "invalidate_active_probe();\n        advance_after_active_conversion();" in poll_section
         and "next_channel_ = (active_channel_ + 1U)" in source,
-        "M9 failures must clear only the active probe and advance one owner sequence",
+        "M9 must begin unsynchronized, discard recovery in its own step, quarantine ambiguous devices, and clear only the affected cache",
     )
+    if pinned_driver is not None:
+        failures.require(
+            "if (offs != OS_OFFSET || mask != OS_MASK)" in pinned_driver
+            and "old &= ~(OS_MASK << OS_OFFSET);" in pinned_driver
+            and "esp_err_t ads111x_set_input_mux" in pinned_driver
+            and "esp_err_t ads111x_set_gain" in pinned_driver
+            and "esp_err_t ads111x_set_data_rate" in pinned_driver,
+            "the pinned 1.1.14 configuration-failure classification must remain grounded in its OS-clearing read-modify-write source",
+        )
 
     for api in (
         "ads111x_init_desc(",
@@ -1418,11 +1448,19 @@ def check_m9_ads1115_contract(failures: CheckFailures) -> None:
 
     for evidence in (
         "test_ads1115_invalid_incomplete_configurations_are_rejected",
-        "test_ads1115_two_devices_and_channels_are_sequenced_without_reuse",
-        "test_ads1115_start_and_read_never_share_a_service_step",
-        "test_ads1115_busy_and_stuck_conversion_never_read_or_block",
-        "test_ads1115_mux_gain_rate_changes_require_a_new_completed_conversion",
+        "test_ads1115_both_devices_require_initial_idle_synchronization",
+        "test_ads1115_initial_stale_result_is_discarded_before_later_restart",
+        "test_ads1115_fake_latches_in_flight_provenance_across_reconfiguration",
+        "test_ads1115_ready_exactly_at_deadline_is_accepted",
+        "test_ads1115_ready_after_deadline_is_accepted",
+        "test_ads1115_busy_exactly_at_deadline_quarantines_without_read",
+        "test_ads1115_timed_out_conversion_cannot_be_reconfigured_or_misattributed",
+        "test_ads1115_ambiguously_failed_start_is_quarantined_and_discarded",
+        "test_ads1115_busy_observation_error_uses_the_same_quarantine_boundary",
+        "test_ads1115_quarantined_device_does_not_block_the_other_adc",
+        "test_ads1115_recovery_requires_idle_and_never_reads_or_restarts_same_step",
         "test_ads1115_per_probe_failures_clear_only_the_affected_sample",
+        "test_ads1115_idle_configure_get_and_calibration_failures_do_not_quarantine",
         "test_ads1115_cached_readings_expire_and_unknown_ids_are_absent",
         "test_ads1115_steady_state_service_and_read_are_observed_allocation_free",
         "test_ads1115_missing_or_invalid_food_probe_never_changes_chamber_control",

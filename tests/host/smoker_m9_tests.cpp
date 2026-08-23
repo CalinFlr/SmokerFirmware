@@ -107,6 +107,14 @@ struct BackendCall final {
     Ads1115DataRate data_rate{Ads1115DataRate::SamplesPerSecond8};
 };
 
+struct ConversionProvenance final {
+    smoker::core::ProbeId probe_id{0U};
+    std::size_t device_index{0U};
+    Ads1115Mux mux{Ads1115Mux::Differential0To1};
+    Ads1115Gain gain{Ads1115Gain::FullScale6V144};
+    Ads1115DataRate data_rate{Ads1115DataRate::SamplesPerSecond8};
+};
+
 class FakeAds1115Backend final : public smoker::platform::IAds1115Backend {
 public:
     [[nodiscard]] bool initialize(
@@ -122,18 +130,29 @@ public:
         const Ads1115ChannelConfiguration& channel
     ) noexcept override
     {
-        record(BackendAction::Configure, channel);
-        current_channels[channel.device_index] = &channel;
-        return fail_configure_probe != channel.probe_id;
+        const auto provenance = provenance_of(channel);
+        record(BackendAction::Configure, provenance);
+        if (fail_configure_probe == channel.probe_id) return false;
+        devices_[channel.device_index].configured = provenance;
+        return true;
     }
 
     [[nodiscard]] bool start_conversion(
         const std::size_t device_index
     ) noexcept override
     {
-        const auto& channel = *current_channels[device_index];
-        record(BackendAction::Start, channel);
-        return fail_start_probe != channel.probe_id;
+        auto& device = devices_[device_index];
+        if (!device.configured) return false;
+        record(BackendAction::Start, *device.configured);
+
+        // A start presented while OS still reports busy cannot replace the
+        // provenance of the conversion already in flight.
+        if (device.busy) return false;
+        if (fail_start_probe == device.configured->probe_id) return false;
+
+        device.in_flight = device.configured;
+        device.busy = true;
+        return ambiguous_start_probe != device.configured->probe_id;
     }
 
     [[nodiscard]] bool conversion_busy(
@@ -141,10 +160,15 @@ public:
         bool& busy_result
     ) noexcept override
     {
-        const auto& channel = *current_channels[device_index];
-        record(BackendAction::Busy, channel);
-        if (fail_busy_probe == channel.probe_id) return false;
-        busy_result = busy;
+        auto& device = devices_[device_index];
+        record(
+            BackendAction::Busy,
+            device.in_flight.value_or(
+                device.configured.value_or(ConversionProvenance{0U, device_index})
+            )
+        );
+        if (fail_busy_device[device_index]) return false;
+        busy_result = device.busy;
         return true;
     }
 
@@ -153,13 +177,49 @@ public:
         std::int16_t& raw_value
     ) noexcept override
     {
-        const auto& channel = *current_channels[device_index];
-        record(BackendAction::Get, channel);
-        if (fail_get_probe == channel.probe_id) return false;
+        auto& device = devices_[device_index];
+        if (!device.in_flight) return false;
+        const auto provenance = *device.in_flight;
+        record(BackendAction::Get, provenance);
+        if (fail_get_probe == provenance.probe_id) return false;
         const auto device_part = static_cast<std::int16_t>(device_index * 100U);
-        const auto mux_part = static_cast<std::int16_t>(channel.mux);
+        const auto mux_part = static_cast<std::int16_t>(provenance.mux);
         raw_value = static_cast<std::int16_t>(1000 + device_part + mux_part);
         return true;
+    }
+
+    void complete_conversion(const std::size_t device_index) noexcept
+    {
+        devices_[device_index].busy = false;
+    }
+
+    void begin_stale_conversion(
+        const std::size_t device_index,
+        const ConversionProvenance provenance
+    ) noexcept
+    {
+        devices_[device_index].in_flight = provenance;
+        devices_[device_index].busy = true;
+    }
+
+    [[nodiscard]] bool device_busy(const std::size_t device_index) const noexcept
+    {
+        return devices_[device_index].busy;
+    }
+
+    [[nodiscard]] std::size_t count_calls(
+        const BackendAction action,
+        const std::optional<std::size_t> device_index = std::nullopt
+    ) const noexcept
+    {
+        std::size_t count = 0U;
+        for (std::size_t index = 0U; index < call_count; ++index) {
+            if (calls[index].action == action
+                && (!device_index || calls[index].device_index == *device_index)) {
+                ++count;
+            }
+        }
+        return count;
     }
 
     void reset_calls() noexcept
@@ -168,10 +228,10 @@ public:
     }
 
     bool initialize_succeeds{true};
-    bool busy{false};
     std::optional<smoker::core::ProbeId> fail_configure_probe;
     std::optional<smoker::core::ProbeId> fail_start_probe;
-    std::optional<smoker::core::ProbeId> fail_busy_probe;
+    std::optional<smoker::core::ProbeId> ambiguous_start_probe;
+    std::array<bool, 2U> fail_busy_device{};
     std::optional<smoker::core::ProbeId> fail_get_probe;
     std::size_t initialize_calls{0U};
     std::size_t initialized_device_count{0U};
@@ -179,14 +239,17 @@ public:
     std::size_t call_count{0U};
 
 private:
-    void record(
-        const BackendAction action,
+    struct Device final {
+        std::optional<ConversionProvenance> configured;
+        std::optional<ConversionProvenance> in_flight;
+        bool busy{false};
+    };
+
+    [[nodiscard]] static ConversionProvenance provenance_of(
         const Ads1115ChannelConfiguration& channel
     ) noexcept
     {
-        assert(call_count < calls.size());
-        calls[call_count++] = BackendCall{
-            action,
+        return ConversionProvenance{
             channel.probe_id,
             channel.device_index,
             channel.mux,
@@ -195,7 +258,23 @@ private:
         };
     }
 
-    std::array<const Ads1115ChannelConfiguration*, 2U> current_channels{};
+    void record(
+        const BackendAction action,
+        const ConversionProvenance provenance
+    ) noexcept
+    {
+        assert(call_count < calls.size());
+        calls[call_count++] = BackendCall{
+            action,
+            provenance.probe_id,
+            provenance.device_index,
+            provenance.mux,
+            provenance.gain,
+            provenance.data_rate,
+        };
+    }
+
+    std::array<Device, 2U> devices_{};
 };
 
 class FakeSampleConverter final : public smoker::platform::IAds1115SampleConverter {
@@ -239,18 +318,18 @@ public:
             Ads1115DataRate::SamplesPerSecond128,
         },
         Ads1115ChannelConfiguration{
-            2U,
-            1U,
-            Ads1115Mux::SingleEnded2,
-            Ads1115Gain::FullScale1V024,
-            Ads1115DataRate::SamplesPerSecond250,
-        },
-        Ads1115ChannelConfiguration{
             3U,
             0U,
             Ads1115Mux::SingleEnded1,
             Ads1115Gain::FullScale0V512,
             Ads1115DataRate::SamplesPerSecond64,
+        },
+        Ads1115ChannelConfiguration{
+            2U,
+            1U,
+            Ads1115Mux::SingleEnded2,
+            Ads1115Gain::FullScale1V024,
+            Ads1115DataRate::SamplesPerSecond250,
         },
     };
 }
@@ -266,13 +345,15 @@ public:
     };
 }
 
-void complete_one_conversion(
+void complete_active_conversion(
     Ads1115FoodProbeSource& source,
-    FakeMonotonicClock& clock
+    FakeAds1115Backend& backend,
+    FakeMonotonicClock& clock,
+    const std::size_t device_index
 )
 {
     using namespace std::chrono_literals;
-    source.service();
+    backend.complete_conversion(device_index);
     clock.advance(1ms);
     source.service();
 }
@@ -322,7 +403,7 @@ void test_ads1115_invalid_incomplete_configurations_are_rejected()
         shared_bus_devices(), std::move(duplicate_probe), 25ms, 100ms,
     }));
     auto duplicate_channel = three_channels();
-    duplicate_channel[2].mux = duplicate_channel[0].mux;
+    duplicate_channel[1].mux = duplicate_channel[0].mux;
     assert(!valid_ads1115_acquisition_configuration({
         shared_bus_devices(), std::move(duplicate_channel), 25ms, 100ms,
     }));
@@ -358,7 +439,7 @@ void test_ads1115_invalid_incomplete_configurations_are_rejected()
     assert(backend.initialize_calls == 0U);
 }
 
-void test_ads1115_two_devices_and_channels_are_sequenced_without_reuse()
+void test_ads1115_both_devices_require_initial_idle_synchronization()
 {
     FakeAds1115Backend backend;
     FakeSampleConverter converter;
@@ -370,38 +451,110 @@ void test_ads1115_two_devices_and_channels_are_sequenced_without_reuse()
     assert(backend.initialized_device_count == 2U);
 
     source.service();
-    assert(backend.call_count == 2U);
-    assert(backend.calls[0].action == BackendAction::Configure);
-    assert(backend.calls[1].action == BackendAction::Start);
-    assert(!source.read(1U));
+    assert(backend.call_count == 1U);
+    assert(backend.calls[0].action == BackendAction::Busy);
+    assert(backend.calls[0].device_index == 0U);
 
     source.service();
-    assert(backend.call_count == 4U);
-    assert(backend.calls[2].action == BackendAction::Busy);
-    assert(backend.calls[3].action == BackendAction::Get);
-    const auto first = source.read(1U);
-    assert(first && first->celsius() == 100.4F);
+    assert(backend.calls[1].action == BackendAction::Configure);
+    assert(backend.calls[2].action == BackendAction::Start);
+    assert(!source.read(1U));
+    complete_active_conversion(source, backend, clock, 0U);
+    assert(source.read(1U)->celsius() == 100.4F);
 
-    complete_one_conversion(source, clock);
-    complete_one_conversion(source, clock);
-    assert(source.read(2U)->celsius() == 110.6F);
+    // The consecutive second channel on device 0 does not need another idle
+    // synchronization after the first conversion completed normally.
+    source.service();
+    assert(backend.calls[backend.call_count - 2U].action == BackendAction::Configure);
+    assert(backend.calls[backend.call_count - 2U].probe_id == 3U);
+    complete_active_conversion(source, backend, clock, 0U);
     assert(source.read(3U)->celsius() == 100.5F);
 
-    const std::array expected_devices{0U, 1U, 0U};
-    const std::array expected_muxes{
-        Ads1115Mux::SingleEnded0,
-        Ads1115Mux::SingleEnded2,
-        Ads1115Mux::SingleEnded1,
-    };
-    for (std::size_t channel = 0U; channel < expected_devices.size(); ++channel) {
-        const auto call = backend.calls[channel * 4U];
-        assert(call.action == BackendAction::Configure);
-        assert(call.device_index == expected_devices[channel]);
-        assert(call.mux == expected_muxes[channel]);
-    }
+    source.service();
+    assert(backend.calls[backend.call_count - 1U].action == BackendAction::Busy);
+    assert(backend.calls[backend.call_count - 1U].device_index == 1U);
+    const auto calls_after_second_sync = backend.call_count;
+    source.service();
+    assert(backend.call_count == calls_after_second_sync + 2U);
+    assert(backend.calls[calls_after_second_sync].action == BackendAction::Configure);
+    assert(backend.calls[calls_after_second_sync + 1U].action == BackendAction::Start);
+    complete_active_conversion(source, backend, clock, 1U);
+    assert(source.read(2U)->celsius() == 110.6F);
 }
 
-void test_ads1115_start_and_read_never_share_a_service_step()
+void test_ads1115_initial_stale_result_is_discarded_before_later_restart()
+{
+    FakeAds1115Backend backend;
+    backend.begin_stale_conversion(
+        0U,
+        ConversionProvenance{
+            99U,
+            0U,
+            Ads1115Mux::SingleEnded3,
+            Ads1115Gain::FullScale6V144,
+            Ads1115DataRate::SamplesPerSecond8,
+        }
+    );
+    FakeSampleConverter converter;
+    FakeMonotonicClock clock;
+    Ads1115FoodProbeSource source{
+        valid_configuration(), backend, converter, clock,
+    };
+
+    source.service();
+    assert(backend.call_count == 1U);
+    assert(backend.calls[0].action == BackendAction::Busy);
+    assert(backend.count_calls(BackendAction::Configure) == 0U);
+    assert(backend.count_calls(BackendAction::Get) == 0U);
+
+    backend.complete_conversion(0U);
+    source.service();
+    assert(backend.call_count == 2U);
+    assert(backend.calls[1].action == BackendAction::Busy);
+    assert(backend.count_calls(BackendAction::Configure) == 0U);
+    assert(backend.count_calls(BackendAction::Start) == 0U);
+    assert(backend.count_calls(BackendAction::Get) == 0U);
+
+    source.service();
+    assert(backend.calls[2].action == BackendAction::Configure);
+    assert(backend.calls[2].probe_id == 3U);
+    assert(backend.calls[3].action == BackendAction::Start);
+    assert(backend.count_calls(BackendAction::Get) == 0U);
+    complete_active_conversion(source, backend, clock, 0U);
+    assert(source.read(3U)->celsius() == 100.5F);
+    assert(converter.calls == 1U);
+}
+
+void test_ads1115_fake_latches_in_flight_provenance_across_reconfiguration()
+{
+    FakeAds1115Backend backend;
+    const auto devices = shared_bus_devices();
+    assert(backend.initialize(devices));
+    const auto channels = three_channels();
+
+    assert(backend.configure_channel(channels[0]));
+    assert(backend.start_conversion(0U));
+    assert(backend.configure_channel(channels[1]));
+    assert(!backend.start_conversion(0U));
+    backend.complete_conversion(0U);
+
+    bool busy = true;
+    assert(backend.conversion_busy(0U, busy));
+    assert(!busy);
+    std::int16_t raw_value = 0;
+    assert(backend.get_value(0U, raw_value));
+    assert(raw_value == 1004);
+    const auto& get = backend.calls[backend.call_count - 1U];
+    assert(get.action == BackendAction::Get);
+    assert(get.probe_id == channels[0].probe_id);
+    assert(get.mux == channels[0].mux);
+    assert(get.gain == channels[0].gain);
+    assert(get.data_rate == channels[0].data_rate);
+}
+
+void assert_ready_at_or_after_deadline_is_accepted(
+    const smoker::core::Duration elapsed
+)
 {
     FakeAds1115Backend backend;
     FakeSampleConverter converter;
@@ -411,15 +564,29 @@ void test_ads1115_start_and_read_never_share_a_service_step()
     };
 
     source.service();
-    assert(backend.call_count == 2U);
-    for (std::size_t index = 0U; index < backend.call_count; ++index) {
-        assert(backend.calls[index].action != BackendAction::Get);
-    }
     source.service();
+    backend.complete_conversion(0U);
+    clock.advance(elapsed);
+    source.service();
+
+    assert(backend.calls[backend.call_count - 2U].action == BackendAction::Busy);
     assert(backend.calls[backend.call_count - 1U].action == BackendAction::Get);
+    assert(source.read(1U)->celsius() == 100.4F);
 }
 
-void test_ads1115_busy_and_stuck_conversion_never_read_or_block()
+void test_ads1115_ready_exactly_at_deadline_is_accepted()
+{
+    using namespace std::chrono_literals;
+    assert_ready_at_or_after_deadline_is_accepted(25ms);
+}
+
+void test_ads1115_ready_after_deadline_is_accepted()
+{
+    using namespace std::chrono_literals;
+    assert_ready_at_or_after_deadline_is_accepted(26ms);
+}
+
+void test_ads1115_busy_exactly_at_deadline_quarantines_without_read()
 {
     using namespace std::chrono_literals;
     FakeAds1115Backend backend;
@@ -429,25 +596,95 @@ void test_ads1115_busy_and_stuck_conversion_never_read_or_block()
         valid_configuration(), backend, converter, clock,
     };
 
-    backend.busy = true;
     source.service();
     source.service();
-    assert(backend.call_count == 3U);
-    assert(backend.calls[2].action == BackendAction::Busy);
-    assert(!source.read(1U));
-
     clock.advance(25ms);
     source.service();
-    assert(backend.call_count == 3U);
+    assert(backend.calls[backend.call_count - 1U].action == BackendAction::Busy);
+    assert(backend.count_calls(BackendAction::Get) == 0U);
     assert(!source.read(1U));
 
-    backend.busy = false;
+    const auto calls_before_quarantined_channel = backend.call_count;
     source.service();
-    assert(backend.calls[backend.call_count - 1U].probe_id == 2U);
-    assert(backend.calls[backend.call_count - 1U].action == BackendAction::Start);
+    assert(backend.call_count == calls_before_quarantined_channel + 1U);
+    assert(backend.calls[backend.call_count - 1U].action == BackendAction::Busy);
+    assert(backend.calls[backend.call_count - 1U].probe_id == 1U);
+    assert(backend.count_calls(BackendAction::Configure) == 1U);
 }
 
-void test_ads1115_mux_gain_rate_changes_require_a_new_completed_conversion()
+void test_ads1115_timed_out_conversion_cannot_be_reconfigured_or_misattributed()
+{
+    using namespace std::chrono_literals;
+    FakeAds1115Backend backend;
+    FakeSampleConverter converter;
+    FakeMonotonicClock clock;
+    Ads1115FoodProbeSource source{
+        valid_configuration(), backend, converter, clock,
+    };
+
+    source.service();
+    source.service();
+    clock.advance(25ms);
+    source.service();
+
+    // Probe 3 is consecutive on the same physical ADC. The abandoned probe-1
+    // conversion is still busy, so probe 3 may only observe OS and be skipped.
+    source.service();
+    assert(backend.calls[backend.call_count - 1U].action == BackendAction::Busy);
+    assert(backend.count_calls(BackendAction::Configure, 0U) == 1U);
+    assert(backend.count_calls(BackendAction::Get, 0U) == 0U);
+    assert(!source.read(3U));
+
+    backend.complete_conversion(0U);
+    source.service();
+    source.service();
+    complete_active_conversion(source, backend, clock, 1U);
+    assert(source.read(2U)->celsius() == 110.6F);
+
+    const auto calls_before_recovery = backend.call_count;
+    source.service();
+    assert(backend.call_count == calls_before_recovery + 1U);
+    assert(backend.calls[backend.call_count - 1U].action == BackendAction::Busy);
+    assert(backend.count_calls(BackendAction::Get, 0U) == 0U);
+    source.service();
+    assert(backend.calls[backend.call_count - 2U].action == BackendAction::Configure);
+    assert(backend.calls[backend.call_count - 1U].action == BackendAction::Start);
+    complete_active_conversion(source, backend, clock, 0U);
+    assert(source.read(1U)->celsius() == 100.4F);
+}
+
+void test_ads1115_ambiguously_failed_start_is_quarantined_and_discarded()
+{
+    FakeAds1115Backend backend;
+    backend.ambiguous_start_probe = 1U;
+    FakeSampleConverter converter;
+    FakeMonotonicClock clock;
+    Ads1115FoodProbeSource source{
+        valid_configuration(), backend, converter, clock,
+    };
+
+    source.service();
+    source.service();
+    assert(backend.device_busy(0U));
+    assert(!source.read(1U));
+
+    const auto calls_before_quarantine_check = backend.call_count;
+    source.service();
+    assert(backend.call_count == calls_before_quarantine_check + 1U);
+    assert(backend.calls[backend.call_count - 1U].action == BackendAction::Busy);
+    assert(backend.count_calls(BackendAction::Configure, 0U) == 1U);
+    assert(backend.count_calls(BackendAction::Get, 0U) == 0U);
+
+    backend.complete_conversion(0U);
+    source.service();
+    source.service();
+    complete_active_conversion(source, backend, clock, 1U);
+    source.service();
+    assert(backend.calls[backend.call_count - 1U].action == BackendAction::Busy);
+    assert(backend.count_calls(BackendAction::Get, 0U) == 0U);
+}
+
+void test_ads1115_busy_observation_error_uses_the_same_quarantine_boundary()
 {
     FakeAds1115Backend backend;
     FakeSampleConverter converter;
@@ -456,20 +693,74 @@ void test_ads1115_mux_gain_rate_changes_require_a_new_completed_conversion()
         valid_configuration(), backend, converter, clock,
     };
 
-    complete_one_conversion(source, clock);
     source.service();
-    assert(backend.calls[backend.call_count - 2U].probe_id == 2U);
-    assert(backend.calls[backend.call_count - 2U].gain == Ads1115Gain::FullScale1V024);
-    assert(backend.calls[backend.call_count - 2U].data_rate == Ads1115DataRate::SamplesPerSecond250);
-    assert(!source.read(2U));
     source.service();
-    assert(source.read(2U));
+    backend.fail_busy_device[0] = true;
+    source.service();
+    assert(!source.read(1U));
+    assert(backend.count_calls(BackendAction::Get, 0U) == 0U);
+
+    backend.fail_busy_device[0] = false;
+    const auto configure_count = backend.count_calls(BackendAction::Configure, 0U);
+    source.service();
+    assert(backend.calls[backend.call_count - 1U].action == BackendAction::Busy);
+    assert(backend.count_calls(BackendAction::Configure, 0U) == configure_count);
+    assert(backend.count_calls(BackendAction::Get, 0U) == 0U);
+}
+
+void test_ads1115_quarantined_device_does_not_block_the_other_adc()
+{
+    using namespace std::chrono_literals;
+    FakeAds1115Backend backend;
+    FakeSampleConverter converter;
+    FakeMonotonicClock clock;
+    Ads1115FoodProbeSource source{
+        valid_configuration(), backend, converter, clock,
+    };
 
     source.service();
-    assert(backend.calls[backend.call_count - 2U].probe_id == 3U);
-    assert(backend.calls[backend.call_count - 2U].gain == Ads1115Gain::FullScale0V512);
-    assert(backend.calls[backend.call_count - 2U].data_rate == Ads1115DataRate::SamplesPerSecond64);
-    assert(!source.read(3U));
+    source.service();
+    clock.advance(25ms);
+    source.service();
+    source.service(); // skip consecutive quarantined device-0 channel
+    source.service(); // synchronize device 1
+    source.service(); // configure/start device 1
+    assert(backend.device_busy(0U));
+    assert(backend.device_busy(1U));
+    complete_active_conversion(source, backend, clock, 1U);
+    assert(source.read(2U)->celsius() == 110.6F);
+    assert(backend.count_calls(BackendAction::Get, 0U) == 0U);
+}
+
+void test_ads1115_recovery_requires_idle_and_never_reads_or_restarts_same_step()
+{
+    using namespace std::chrono_literals;
+    FakeAds1115Backend backend;
+    FakeSampleConverter converter;
+    FakeMonotonicClock clock;
+    Ads1115FoodProbeSource source{
+        valid_configuration(), backend, converter, clock,
+    };
+
+    source.service();
+    source.service();
+    clock.advance(25ms);
+    source.service();
+    source.service();
+    source.service();
+    source.service();
+    complete_active_conversion(source, backend, clock, 1U);
+
+    backend.complete_conversion(0U);
+    const auto calls_before_recovery = backend.call_count;
+    source.service();
+    assert(backend.call_count == calls_before_recovery + 1U);
+    assert(backend.calls[calls_before_recovery].action == BackendAction::Busy);
+    assert(backend.count_calls(BackendAction::Get, 0U) == 0U);
+
+    source.service();
+    assert(backend.calls[backend.call_count - 2U].action == BackendAction::Configure);
+    assert(backend.calls[backend.call_count - 1U].action == BackendAction::Start);
 }
 
 enum class InjectedFailure : std::uint8_t {
@@ -480,6 +771,22 @@ enum class InjectedFailure : std::uint8_t {
     Calibration,
 };
 
+void populate_all_probe_caches(
+    Ads1115FoodProbeSource& source,
+    FakeAds1115Backend& backend,
+    FakeMonotonicClock& clock
+)
+{
+    source.service();
+    source.service();
+    complete_active_conversion(source, backend, clock, 0U);
+    source.service();
+    complete_active_conversion(source, backend, clock, 0U);
+    source.service();
+    source.service();
+    complete_active_conversion(source, backend, clock, 1U);
+}
+
 void assert_failure_clears_only_affected_probe(const InjectedFailure failure)
 {
     FakeAds1115Backend backend;
@@ -488,9 +795,7 @@ void assert_failure_clears_only_affected_probe(const InjectedFailure failure)
     Ads1115FoodProbeSource source{
         valid_configuration(), backend, converter, clock,
     };
-    complete_one_conversion(source, clock);
-    complete_one_conversion(source, clock);
-    complete_one_conversion(source, clock);
+    populate_all_probe_caches(source, backend, clock);
     assert(source.read(1U));
     assert(source.read(2U));
     assert(source.read(3U));
@@ -498,7 +803,7 @@ void assert_failure_clears_only_affected_probe(const InjectedFailure failure)
     switch (failure) {
     case InjectedFailure::Configure: backend.fail_configure_probe = 1U; break;
     case InjectedFailure::Start: backend.fail_start_probe = 1U; break;
-    case InjectedFailure::Busy: backend.fail_busy_probe = 1U; break;
+    case InjectedFailure::Busy: backend.fail_busy_device[0] = true; break;
     case InjectedFailure::Get: backend.fail_get_probe = 1U; break;
     case InjectedFailure::Calibration: converter.fail_probe = 1U; break;
     }
@@ -507,6 +812,7 @@ void assert_failure_clears_only_affected_probe(const InjectedFailure failure)
     if (failure == InjectedFailure::Busy
         || failure == InjectedFailure::Get
         || failure == InjectedFailure::Calibration) {
+        if (failure != InjectedFailure::Busy) backend.complete_conversion(0U);
         source.service();
     }
     assert(!source.read(1U));
@@ -523,6 +829,52 @@ void test_ads1115_per_probe_failures_clear_only_the_affected_sample()
     assert_failure_clears_only_affected_probe(InjectedFailure::Calibration);
 }
 
+void test_ads1115_idle_configure_get_and_calibration_failures_do_not_quarantine()
+{
+    FakeAds1115Backend backend;
+    FakeSampleConverter converter;
+    FakeMonotonicClock clock;
+    Ads1115FoodProbeSource source{
+        valid_configuration(), backend, converter, clock,
+    };
+
+    source.service();
+    backend.fail_configure_probe = 1U;
+    source.service();
+    backend.fail_configure_probe.reset();
+    const auto busy_count_after_configure_failure = backend.count_calls(BackendAction::Busy, 0U);
+    source.service();
+    assert(backend.calls[backend.call_count - 2U].probe_id == 3U);
+    assert(backend.calls[backend.call_count - 1U].action == BackendAction::Start);
+    assert(backend.count_calls(BackendAction::Busy, 0U) == busy_count_after_configure_failure);
+
+    backend.fail_get_probe = 3U;
+    backend.complete_conversion(0U);
+    source.service();
+    assert(!source.read(3U));
+    backend.fail_get_probe.reset();
+
+    source.service();
+    source.service();
+    complete_active_conversion(source, backend, clock, 1U);
+    const auto busy_count_before_device_zero_restart = backend.count_calls(BackendAction::Busy, 0U);
+    source.service();
+    assert(backend.calls[backend.call_count - 2U].action == BackendAction::Configure);
+    assert(backend.calls[backend.call_count - 1U].action == BackendAction::Start);
+    assert(backend.count_calls(BackendAction::Busy, 0U) == busy_count_before_device_zero_restart);
+
+    converter.fail_probe = 1U;
+    backend.complete_conversion(0U);
+    source.service();
+    assert(!source.read(1U));
+    converter.fail_probe.reset();
+    const auto busy_count_before_post_calibration_start = backend.count_calls(BackendAction::Busy, 0U);
+    source.service();
+    assert(backend.calls[backend.call_count - 2U].probe_id == 3U);
+    assert(backend.calls[backend.call_count - 1U].action == BackendAction::Start);
+    assert(backend.count_calls(BackendAction::Busy, 0U) == busy_count_before_post_calibration_start);
+}
+
 void test_ads1115_cached_readings_expire_and_unknown_ids_are_absent()
 {
     using namespace std::chrono_literals;
@@ -533,20 +885,23 @@ void test_ads1115_cached_readings_expire_and_unknown_ids_are_absent()
         valid_configuration(), backend, converter, clock,
     };
 
-    complete_one_conversion(source, clock);
-    complete_one_conversion(source, clock);
+    source.service();
+    source.service();
+    complete_active_conversion(source, backend, clock, 0U);
+    source.service();
+    complete_active_conversion(source, backend, clock, 0U);
     assert(source.read(1U));
-    assert(source.read(2U));
+    assert(source.read(3U));
     assert(!source.read(99U));
 
     clock.advance(99ms);
     assert(source.read(1U));
-    assert(source.read(2U));
+    assert(source.read(3U));
     clock.advance(1ms);
     assert(!source.read(1U));
-    assert(source.read(2U));
+    assert(source.read(3U));
     clock.advance(1ms);
-    assert(!source.read(2U));
+    assert(!source.read(3U));
 }
 
 void test_ads1115_steady_state_service_and_read_are_observed_allocation_free()
@@ -560,9 +915,15 @@ void test_ads1115_steady_state_service_and_read_are_observed_allocation_free()
 
     allocation_probe::begin();
     source.service();
+    const auto synchronization_allocations = allocation_probe::end();
+    assert(synchronization_allocations == 0U);
+
+    allocation_probe::begin();
+    source.service();
     const auto start_allocations = allocation_probe::end();
     assert(start_allocations == 0U);
 
+    backend.complete_conversion(0U);
     allocation_probe::begin();
     source.service();
     const auto poll_allocations = allocation_probe::end();
@@ -631,7 +992,9 @@ void test_ads1115_missing_or_invalid_food_probe_never_changes_chamber_control()
     assert(!missing_snapshot.active_fault);
     assert(missing_snapshot.heater_demand.percent() == 100.0F);
 
-    complete_one_conversion(food_source, acquisition_clock);
+    food_source.service();
+    food_source.service();
+    complete_active_conversion(food_source, backend, acquisition_clock, 0U);
     application.tick();
     const auto invalid_snapshot = application.snapshot();
     assert(!invalid_snapshot.active_fault);
@@ -644,11 +1007,19 @@ void test_ads1115_missing_or_invalid_food_probe_never_changes_chamber_control()
 int main()
 {
     test_ads1115_invalid_incomplete_configurations_are_rejected();
-    test_ads1115_two_devices_and_channels_are_sequenced_without_reuse();
-    test_ads1115_start_and_read_never_share_a_service_step();
-    test_ads1115_busy_and_stuck_conversion_never_read_or_block();
-    test_ads1115_mux_gain_rate_changes_require_a_new_completed_conversion();
+    test_ads1115_both_devices_require_initial_idle_synchronization();
+    test_ads1115_initial_stale_result_is_discarded_before_later_restart();
+    test_ads1115_fake_latches_in_flight_provenance_across_reconfiguration();
+    test_ads1115_ready_exactly_at_deadline_is_accepted();
+    test_ads1115_ready_after_deadline_is_accepted();
+    test_ads1115_busy_exactly_at_deadline_quarantines_without_read();
+    test_ads1115_timed_out_conversion_cannot_be_reconfigured_or_misattributed();
+    test_ads1115_ambiguously_failed_start_is_quarantined_and_discarded();
+    test_ads1115_busy_observation_error_uses_the_same_quarantine_boundary();
+    test_ads1115_quarantined_device_does_not_block_the_other_adc();
+    test_ads1115_recovery_requires_idle_and_never_reads_or_restarts_same_step();
     test_ads1115_per_probe_failures_clear_only_the_affected_sample();
+    test_ads1115_idle_configure_get_and_calibration_failures_do_not_quarantine();
     test_ads1115_cached_readings_expire_and_unknown_ids_are_absent();
     test_ads1115_steady_state_service_and_read_are_observed_allocation_free();
     test_ads1115_missing_or_invalid_food_probe_never_changes_chamber_control();

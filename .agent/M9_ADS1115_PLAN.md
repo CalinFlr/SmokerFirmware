@@ -96,5 +96,6 @@ git diff --check
   or claimed; the M6B/M9 physical gates above remain open.
 - The subsequent inactive integration adds one staged single-shot sequencer,
   timestamped caches, mandatory injected calibration/validity, and a target-only
-  pinned-API backend. It does not revise this checkpoint's dependency evidence
-  or activate I2C in production.
+  pinned-API backend. Its later recovery remediation adds explicit per-device
+  synchronization/quarantine and latched conversion provenance without revising
+  this checkpoint's dependency evidence or activating I2C in production.
