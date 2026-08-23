@@ -214,12 +214,40 @@ quiescent.
 
 M9 software integration also leaves production composition unchanged. One
 `Ads1115FoodProbeSource` owns the complete channel round robin and per-channel
-state. An idle service step explicitly configures mux, gain, and data rate for
-one mapped channel, starts a single-shot conversion, and returns. A later step
-checks a monotonic deadline, calls the pinned busy API once, and reads the raw
-conversion value only when that same conversion reports ready. It never sleeps,
-polls in a loop, creates a task, or allows a previously selected mux result to
-cross into the next channel.
+cache, plus explicit `Unsynchronized`, `Idle`, or `Converting` state for each
+physical ADC. Both devices begin unsynchronized after backend initialization:
+pinned `ads111x_set_mode()` is a read-modify-write configuration transaction,
+not proof that a conversion started before an MCU-only reset has completed.
+
+Before first use and after quarantine, a service step calls the pinned busy API
+once. An error or `busy=true` performs no configure/start/value operation and
+leaves that ADC unsynchronized while the round robin advances so the other ADC
+can progress. A successful `busy=false` synchronizes the device and discards
+any pre-existing result, but recovery never starts a new conversion in that
+same service step. Only a later step explicitly configures mux, gain, and data
+rate, starts one single-shot conversion, calculates its monotonic deadline, and
+returns.
+
+For an active conversion, OS/busy is observed before the deadline is evaluated.
+`busy=false` proves the converter idle and makes the latched result eligible for
+read/calibration even when polled exactly at or after the deadline, because the
+poll time does not reveal the completion time. `busy=true` before the deadline
+retains the conversion. `busy=true` at or after it discards the affected sample
+and quarantines that ADC until a later successful idle observation. A busy-read
+error and every failed start have the same quarantine boundary because either
+can leave conversion state unknown; no abandoned result is read or attributed
+to another channel. Consecutive logical channels on that ADC are skipped while
+unknown rather than blocking the healthy device.
+
+Once `busy=false` has succeeded, a value-read failure invalidates only the
+active sample because the ADC is known idle. Calibration/validity failure is
+also probe-local. In pinned driver 1.1.14, mux/gain/rate setters use
+`write_conf_bits()`, whose non-OS writes explicitly clear OS in the value sent
+to the device. Therefore a configuration failure while a previously
+synchronized converter is idle may leave partial configuration, but cannot
+start a conversion; the attempted probe is invalidated and safe round-robin
+scheduling continues without quarantine. The sequencer never sleeps, polls in
+a loop, creates a task, or lets a previously latched result cross channels.
 
 `IFoodProbeSource::read(probe_id)` performs no I2C work. It returns only a
 timestamped cached `Temperature` while the configured maximum age has not

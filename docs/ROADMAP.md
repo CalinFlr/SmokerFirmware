@@ -339,11 +339,24 @@ straps are example wiring only. The project must document two distinct physical
 addresses from `0x48..0x4b` before activation.
 
 The inactive adapter stays in `smoker_platform` behind `IFoodProbeSource`,
-without a separate sensor task. One acquisition owner stages explicit
-mux/gain/rate configuration plus single-shot start, returns, and only on a
-later service step checks deadline/readiness and obtains the same raw result.
-`read(probe_id)` is I2C-free and returns an independently timestamped cached
-temperature only before the required configured maximum age expires.
+without a separate sensor task. One acquisition owner retains independent
+per-device synchronization/quarantine state. Both ADCs begin unsynchronized;
+first use and recovery require a successful idle observation which discards
+any stale result and never configures/restarts in that service step. Busy or
+unknown devices are skipped so a healthy ADC progresses even when consecutive
+logical channels use the quarantined device.
+
+Only a synchronized idle device receives explicit mux/gain/rate configuration
+and single-shot start. The deadline is established after successful start. A
+later service step observes readiness before applying the deadline: ready is
+accepted even at/after it, while still busy at/after it, failed busy
+observation, or failed start quarantines the ADC and discards the abandoned
+result. Configuration failure while idle, ready-then-value failure, and
+calibration/validity failure invalidate only the affected probe. This
+classification is grounded in pinned 1.1.14, whose non-OS configuration writes
+clear OS and cannot start a single-shot conversion. `read(probe_id)` is
+I2C-free and returns an independently timestamped cached temperature only
+before the required configured maximum age expires.
 
 Raw codes require injected calibration/validity with no physical defaults.
 All buses, pins, pull-ups, addresses, mappings, mux/gain/rate values, conversion

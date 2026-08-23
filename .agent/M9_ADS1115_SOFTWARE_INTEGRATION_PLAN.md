@@ -1,11 +1,12 @@
-# Inactive dual-ADS1115 software integration plan
+# Inactive dual-ADS1115 software integration and recovery plan
 
 ## Goal
 
 Implement the smallest host-testable and ESP-IDF-cross-buildable dual-ADS1115
 food-probe acquisition boundary while production remains on
 `SimulatedFoodProbeSource` and every unknown physical value stays mandatory
-configuration.
+configuration. Preserve conversion provenance across timeouts and ambiguous I2C
+failures by requiring explicit per-device idle synchronization before reuse.
 
 ## Scope
 
@@ -13,6 +14,8 @@ configuration.
   `IFoodProbeSource`;
 - stage explicit single-shot mux/gain/rate selection, start, later readiness,
   and later raw-value retrieval without a polling loop;
+- begin each ADC unsynchronized, quarantine it after ambiguous start/busy
+  outcomes, discard abandoned results, and let the other ADC continue;
 - cache independently timestamped per-probe results for allocation-free reads;
 - require an injected raw-code calibration/validity policy with no physical
   defaults;
@@ -39,6 +42,9 @@ configuration.
 - `ads111x_init_desc()` writes 1 MHz to the public descriptor and creates a
   device mutex. Its mode, mux, gain, rate, start, busy, and value APIs each use
   I2C transactions through locked `i2cdev` 2.1.2.
+- pinned 1.1.14 `ads111x_set_mode()` is a read-modify-write and cannot prove an
+  externally powered ADC idle after an MCU-only reset. Its mux/gain/rate writes
+  clear OS and cannot start conversion; start/busy failures remain ambiguous.
 - Locked `i2cdev` lazily creates the port/device on first I/O, can wait up to
   `CONFIG_I2CDEV_TIMEOUT`, and retries with internal `vTaskDelay()`. That is
   incompatible with claiming a proven bounded ControlTask path.
@@ -62,12 +68,16 @@ configuration.
 ## Steps
 
 1. Add explicit platform configuration types, validation, calibration seam,
-   cached food-probe source, and one round-robin state machine.
+   cached food-probe source, one round-robin state machine, and independent
+   per-device synchronization/quarantine state.
 2. Add the target-only two-descriptor backend, override the driver-owned 1 MHz
    clock before first I2C I/O, and call only the pinned mode/mux/gain/rate/start/
    busy/value/free APIs.
-3. Add focused host tests for configuration, sequencing/freshness, failures,
-   expiry, timeout, allocation observation, and chamber-control isolation.
+3. Add a provenance-aware two-device fake and focused host tests for initial
+   synchronization, stale-result discard, ready/busy deadline boundaries,
+   ambiguous failures, quarantine recovery/progress, failure classification,
+   expiry, allocation observation, and chamber-control isolation. Keep
+   consecutive same-device channels in the fixture.
 4. Extend architecture guardrails for platform confinement, target-only driver
    use, API/call ordering, absence of project waits/tasks, explicit
    configuration, and continued simulated composition.
@@ -108,6 +118,15 @@ git status --short --untracked-files=all
 - Added one inactive `Ads1115FoodProbeSource` round-robin sequencer and a
   target-only `Ads1115TargetBackend`; production remains simulated and no
   `i2cdev_init()` call or runtime service placement was added.
+- Remediated the conversion-provenance boundary with per-device
+  `Unsynchronized`/`Idle`/`Converting` state. Initial/recovery synchronization
+  discards stale results without same-step restart; ready is evaluated before
+  timeout; ambiguous start/busy outcomes quarantine only their ADC; and
+  known-idle configure/get plus calibration failures stay probe-local.
+- Replaced the masking host fake with independently busy devices and latched
+  in-flight mux/gain/rate/probe provenance, including stale external starts,
+  ambiguously delivered starts, busy-observation errors, and no replacement of
+  an already-running conversion.
 - Exercised the exact pinned target APIs `ads111x_init_desc()`,
   `ads111x_free_desc()`, `ads111x_set_mode()`,
   `ads111x_set_input_mux()`, `ads111x_set_gain()`,

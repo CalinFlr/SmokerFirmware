@@ -1008,11 +1008,29 @@ are documented at M6B.
 
 The inactive implementation is one `smoker_platform` acquisition owner behind
 the existing `IFoodProbeSource` port. It owns both device/channel state and
-uses explicit single-shot mux/gain/rate configuration, start, a later one-shot
-busy check, and value retrieval only after that same conversion completes. It
-creates no task, contains no project-owned wait/poll loop, and does not expose
-ESP-IDF/driver types to `smoker_app` or `smoker_core`. `read(probe_id)` performs
-no I2C work; it returns only an independently timestamped cache entry before a
+uses one round robin plus explicit synchronization/quarantine state per ADC.
+Both devices begin unsynchronized even after successful backend initialization,
+because `ads111x_set_mode()` cannot prove that an externally powered ADC is
+idle after an MCU-only reset. First use and quarantine recovery require one
+successful `busy=false` observation which discards any old result and performs
+no configure/start in that service step. Busy/error devices are skipped so a
+healthy ADC continues to progress, including across consecutive logical
+channels mapped to the quarantined device.
+
+After explicit single-shot mux/gain/rate configuration and a successful start,
+the deadline is calculated and a later service step observes busy before
+evaluating that deadline. Ready is accepted at or after the boundary because
+polling time cannot reveal completion time. Still busy at/after the boundary,
+a busy-read error, or a failed start quarantines the physical device and the
+abandoned result is never read. A successful ready observation followed by a
+value-read failure leaves the known-idle device reusable; calibration/validity
+and configuration failures remain probe-local. Pinned 1.1.14
+`write_conf_bits()` clears OS for mux/gain/rate writes, so a failed
+configuration transaction on a synchronized idle ADC cannot itself start a
+conversion, even if it partially changes configuration. The adapter creates no
+task, contains no project-owned wait/poll loop, and does not expose ESP-IDF/
+driver types to `smoker_app` or `smoker_core`. `read(probe_id)` performs no I2C
+work; it returns only an independently timestamped cache entry before a
 required configured maximum age expires.
 
 Raw ADC codes have no physical interpretation in the adapter. A mandatory
@@ -1040,10 +1058,10 @@ task delays, and allocate during initialization or error recovery. Host/API
 cross-build evidence therefore does not establish bounded real target latency,
 allocation freedom, or suitability for ControlTask.
 
-An I2C, conversion, calibration, or validity failure becomes an absent reading
-for the affected food probe. Per BR-005 and SF-008, food probes remain
-monitoring/alarm inputs: no ADS1115 value or failure directly changes the
-authoritative chamber control, fault policy, or heater demand.
+Failures invalidate only the attempted or active food-probe cache; ambiguous
+start/busy failures additionally quarantine only their physical ADC. Per
+BR-005 and SF-008, food probes remain monitoring/alarm inputs: no ADS1115 value or failure directly changes the authoritative chamber control, fault policy,
+or heater demand.
 
 Status: Accepted.
 

@@ -2,6 +2,7 @@
 
 #include "smoker/app/ports.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -166,9 +167,17 @@ private:
         Converting,
     };
 
+    enum class DeviceState : std::uint8_t {
+        Unsynchronized,
+        Idle,
+        Converting,
+    };
+
     void start_next_conversion() noexcept;
     void poll_active_conversion() noexcept;
-    void fail_active_probe() noexcept;
+    void invalidate_active_probe() noexcept;
+    void quarantine_active_device() noexcept;
+    void advance_to_next_channel() noexcept;
     void advance_after_active_conversion() noexcept;
 
     Ads1115AcquisitionConfiguration configuration_;
@@ -176,6 +185,7 @@ private:
     IAds1115SampleConverter& sample_converter_;
     const app::IClock& clock_;
     std::vector<std::optional<CachedSample>> samples_;
+    std::array<DeviceState, 2U> device_states_{};
     std::size_t next_channel_{0U};
     std::size_t active_channel_{0U};
     core::MonotonicTimePoint conversion_deadline_{};
