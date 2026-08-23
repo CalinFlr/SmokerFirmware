@@ -363,11 +363,12 @@ void test_control_is_independent_of_blynk_transport()
     };
     smoker::platform::SimulatedChamberSensor chamber{temperature(25.0F)};
     smoker::platform::SimulatedFoodProbeSource probe_source{probes};
+    smoker::platform::DeterministicChamberController chamber_controller;
     smoker::platform::SimulatedHeaterOutput heater;
     smoker::platform::SimulatedClock clock;
     smoker::platform::SimulatedEventSink events;
     smoker::app::SmokerApplication application{
-        chamber, probe_source, heater, clock, events,
+        chamber, probe_source, chamber_controller, heater, clock, events,
         smoker::core::SafetyLimits{temperature(150.0F)}, probes,
     };
     smoker::platform::BlynkInboundMailbox stalled_transport;

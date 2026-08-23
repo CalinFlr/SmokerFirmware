@@ -74,7 +74,7 @@ Do not create ports before a milestone needs them.
 
 ESP-IDF/hardware-specific implementations.
 
-Current M15 plus inactive M7/M9 software implementations:
+Current M15 plus inactive M7/M8/M9 software implementations:
 
 - simulated chamber/probe sources;
 - simulated heater output;
@@ -102,10 +102,13 @@ Current M15 plus inactive M7/M9 software implementations:
   one host-testable staged acquisition owner, timestamped per-probe caches,
   mandatory injected calibration/validity, and a target-only RAII backend over
   the pinned 1.1.14 API. Production composition remains simulated.
+- an application-owned `IChamberController` boundary, deterministic adapter
+  retaining production's M2 100/0 behavior, and an inactive host-testable PID
+  adapter with a target-only RAII backend over exact-pinned `pid_ctrl` 0.3.1
+  float APIs. Production does not compose the PID adapter.
 
 Future examples:
 
-- M8 `espressif/pid_ctrl` adapter behind an application-owned control port;
 - SSR heater output;
 - NVS session/config store;
 - ESP clock/reset-reason adapter;
@@ -209,6 +212,88 @@ shutdown write/readback failure makes the diagnostic fail. Source/build
 evidence proves this intended cleanup sequence only; without executing the
 connected diagnostic it does not prove that a physical converter became
 quiescent.
+
+### Inactive M8 PID boundary
+
+The first M8 slice adds `IChamberController` to `smoker_app`. It accepts the
+authoritative chamber `Temperature` and active target and synchronously returns
+either a typed normalized `HeaterDemand` request or explicit failure. Its
+`reset()` operation clears/disables latent controller state and reports failure.
+The port contains no ESP-IDF or component type and is injected explicitly into
+every `SmokerApplication` construction site.
+
+Production constructs `DeterministicChamberController`, a thin adapter around
+the existing core 100% below target / 0% at-or-above-target calculation. The
+real `PidChamberController` is compiled and host-tested but is not constructed
+by `main` or `SimulationContext`. `SimulatedChamberSensor`,
+`SimulatedFoodProbeSource`, and `SimulatedHeaterOutput` remain the production
+composition; there is no SSR output, GPIO assignment, or switching window.
+
+The official registry dependency is `espressif/pid_ctrl` exactly 0.3.1 at
+component hash
+`974be0666bb4d95f49677327dd8305781d04d8bae284fdde2fbadf06ca9d4979`.
+Its mandatory `espressif/iqmath` 1.11.0~1 dependency is locked at
+`39448db759b410373e543798167ca4670bbff3019cb290a2fe8e627221e71b9d`.
+The reviewed component offers float and IQmath numeric backends and explicit
+positional/incremental forms. It has no autotuning, plant-identification,
+sample-period, or delta-time input.
+
+The inactive target backend selects only the exact float APIs
+`pid_new_control_block_f()`, `pid_compute_f()`,
+`pid_reset_ctrl_block_f()`, and `pid_del_control_block_f()`. This matches the
+project's float `Temperature`/`HeaterDemand` boundary and ESP-IDF 6.0.2's
+ESP32-S3 `SOC_CPU_HAS_FPU`/single-precision DFPU evidence. The form remains
+mandatory configuration rather than a production selection. Common gains and
+normalized output bounds are explicit and finite. Positional form additionally
+requires finite ordered accumulated-error bounds containing zero. Incremental
+form rejects those project-visible bounds because upstream does not use them;
+the target adapter supplies deterministic `0/0` only to the ignored upstream
+struct fields. Test coefficients are fixtures, not tuning recommendations.
+
+In positional form, reviewed 0.3.1 accumulates raw error once per call, clamps
+that accumulated error before multiplying it by Ki, and differentiates error.
+Incremental form does not read accumulated error or either positional bound;
+it adds per-call error changes to retained output and clamps that output to the
+common output limits. Both forms have implicit per-call gains because there is
+no `dt`, both differentiate error rather than measurement, and neither provides
+derivative filtering. With the project boundary fixed at target minus measured,
+a target step can therefore produce derivative kick. These are activation and
+tuning considerations, not approval of either form for production.
+
+Upstream float creation allocates the control block with `calloc()`, so backend
+creation is initialization work before `ControlTask` starts. Reviewed valid
+compute/reset paths reuse that block and intentionally perform no allocation.
+Project-owned request/reset paths add no allocation, task, I/O, logging, delay,
+wait, or lock. Host allocation observation and source guardrails cover those
+specific paths; they are not real target timing or thermal evidence.
+
+The application computes a requested demand only while configuration is valid,
+the session is `RUNNING`, a chamber value and target exist, and no fault/update
+interlock is active. Construction issues the observable heater-OFF write before
+its first controller reset callback. This application ordering does not replace
+safe initialization inside a future real heater-output driver. Stop, an
+effective target removal, invalid measurement, safety fault, firmware-update
+interlock, and every other transition out of eligibility reset the controller
+before the OFF write. Reported application-owned resets carry failure into
+`ControlLoopFailure`; `PidChamberController` does not perform an ignored reset
+from its destructor, while the target backend still releases its owned control
+block through RAII. A later successful reset can only resolve the condition for
+explicit clear. Clear leaves the session `STOPPED`, so a new Start is still
+required. The cycle order remains controller request, synchronous safety
+evaluation, safety gate, and the sole final heater write.
+
+Non-Stop commands are evaluated as one control-cycle batch. Accepted target
+removal followed by restoration in the same batch leaves an eligible final
+state and does not create an intermediate output/reset boundary. RR-003 applies
+when the target is absent at control evaluation; only accepted manual Stop has
+the explicit OFF-cycle barrier required by SR-003 and D031.
+
+`pid_ctrl` is a runtime PID engine, not an autotuner. Automatic tuning is a
+separate future design decision and cannot be selected or safely tested before
+the real chamber sensor, SSR/heater, smoker thermal plant, and independent
+cutoff are available and validated. No simulated result is a production tuning
+recommendation. Because the API has no `dt`, binding the call cadence and gains
+to a measured, validated real control period remains an M8 activation gate.
 
 ### Inactive M9 dual-ADS1115 boundary
 
@@ -442,12 +527,13 @@ Do not split V0 into separate:
 - timer task;
 - session task.
 
-M8 retains this concurrency model. The Espressif PID component is called
-synchronously through a `smoker_platform` adapter by the owning `ControlTask`;
-it does not own a task or bypass `SmokerApplication`. Its requested normalized
-demand proceeds through the same synchronous safety gate before the sole final
-heater write. The platform placement contains the component's ESP-IDF types and
-keeps `smoker_core` host-portable.
+The inactive M8 slice retains this concurrency model. `SmokerApplication`
+calls its injected controller synchronously in the owning `ControlTask`; the
+production instance is still deterministic, while the compiled PID adapter is
+not composed. Neither owns a task or bypasses the application. Requested
+normalized demand proceeds through synchronous safety evaluation and the same
+gate before the sole final heater write. Platform placement contains the
+component's ESP-IDF types and keeps `smoker_core` host-portable.
 
 A conceptual control cycle:
 
@@ -456,8 +542,8 @@ A conceptual control cycle:
 2. Drain/process pending commands
 3. Derive probe connectivity events and active-session alarms using new commands
 4. Update session/timer state
-5. Validate measurements and evaluate safety
-6. Calculate requested heater demand
+5. Calculate requested heater demand or reset an ineligible controller
+6. Validate measurements, evaluate safety, and latch controller failure
 7. Apply safety override
 8. Write final heater demand
 9. Publish bounded events/alarms
@@ -936,10 +1022,13 @@ M15 checks additionally cover the exact MQTT pin, platform confinement,
 callback isolation, two bounded mailboxes, fair ControlTask draining, static
 core/priority placement, TLS/session/topic settings, provisioning boundaries,
 status/result separation, and bounded payloads.
-The inactive M7/M9 checks additionally keep both hardware drivers target-only,
-preserve simulated production composition, enforce explicit configuration and
-freshness/call ordering, and reject project-owned waits/tasks in their adapter
-paths.
+The inactive M7/M8/M9 checks additionally keep hardware/component types
+target-only, preserve simulated production composition, enforce exact registry
+pins and explicit configuration/call ordering, and reject project-owned
+waits/tasks/steady-state allocation in their adapter paths. The M8 check can
+optionally validate the reviewed upstream source when managed components are
+present, but never fetches and passes a tracked-files-only checkout when they
+are absent.
 `tools/check_traceability.py` requires one explicit matrix row
 for every approved rule and validates concrete host-test references for rules
 marked implemented.

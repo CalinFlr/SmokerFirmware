@@ -971,9 +971,11 @@ void test_ads1115_missing_or_invalid_food_probe_never_changes_chamber_control()
             std::nullopt, true, false,
         },
     };
+    smoker::platform::DeterministicChamberController chamber_controller;
     smoker::app::SmokerApplication application{
         chamber,
         food_source,
+        chamber_controller,
         heater,
         clock,
         events,

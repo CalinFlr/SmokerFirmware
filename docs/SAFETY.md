@@ -53,10 +53,24 @@ The business requirement is to control chamber temperature around its target.
 
 PID/hysteresis/tuning/window timing are technical implementation choices and are not fixed by V0 business rules.
 
-D055 and M8 select Espressif's official `espressif/pid_ctrl` component for the
-future real controller. This technical selection does not change the rule:
-PID output is only a requested normalized demand, safety is applied afterward,
-and no tuning value is approved before real M6B/M7/M8 hardware validation.
+D055 and the inactive first M8 slice exact-pin Espressif's official
+`espressif/pid_ctrl` 0.3.1 component and compile its float adapter without
+composing it in production. Production retains deterministic 100/0 simulated
+control. This technical selection does not change the rule: controller output
+is only a requested normalized demand, synchronous safety is evaluated
+afterward before the only heater write, and no tuning value is approved before
+real M6B/M7/M8 hardware validation.
+
+The component is a runtime PID engine and provides no autotuning, plant
+identification, or `dt` input. Automatic tuning and cadence-bound gains remain
+separate future decisions. No simulated coefficient or result is a production
+tuning recommendation.
+
+Reviewed positional form clamps accumulated per-call error, while incremental
+form ignores those bounds and saturates retained output. Both differentiate
+target-minus-measured error, provide no derivative filtering, and can therefore
+kick on a target step. These behaviors require real activation/tuning review;
+neither calculation form is production-approved.
 
 ## Safety rules
 

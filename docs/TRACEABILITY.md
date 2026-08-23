@@ -7,7 +7,9 @@ the inactive M7 MAX31865 adapter is host-tested and API cross-built while
 production remains simulated; its default-OFF board diagnostic is build-only
 and has not been executed; the inactive M9 dual-ADS1115 sequencer is
 host-tested and API cross-built while production probe acquisition also remains
-simulated; phone push receipt, native mobile layout, exact broker timing,
+simulated; the first inactive M8 PID slice is host-tested and API cross-built
+while production demand remains deterministic 100/0 and heater output simulated;
+phone push receipt, native mobile layout, exact broker timing,
 deliberate transport loss, the M14 Wi-Fi-loss scenario, M12 radio edge cases,
 and all external-sensor/hardware safety evidence remain pending**
 
@@ -31,7 +33,8 @@ ESP-IDF cross-build pass.
 
 Test names below refer to functions in `tests/host/smoker_core_tests.cpp`,
 `tests/host/smoker_v0_tests.cpp`, `tests/host/smoker_m7_tests.cpp`,
-`tests/host/smoker_m9_tests.cpp`, `tests/host/smoker_m12_tests.cpp`,
+`tests/host/smoker_m8_tests.cpp`, `tests/host/smoker_m9_tests.cpp`,
+`tests/host/smoker_m12_tests.cpp`,
 `tests/host/smoker_m13_tests.cpp`,
 `tests/host/smoker_m14_tests.cpp`, and `tests/host/smoker_m15_tests.cpp`. All
 host test groups are registered in `tests/CMakeLists.txt`.
@@ -117,7 +120,7 @@ host test groups are registered in `tests/CMakeLists.txt`.
 | CR-003 | M1/M2 implemented | `HeaterDemand` enforces finite 0..100 percent; platform output owns electrical conversion | `test_heater_demand`, `test_m2` | H-pass, B-pass |
 | CR-004 | M4 implemented | recipe/live chamber targets cannot exceed configured simulation maximum | `test_m4_over_temperature_and_limits` | H-pass, B-pass |
 | CR-005 | M3/M4 implemented/P0 hardened | `apply_safety_gate()` allows demand only for Running without active fault | `test_m3_session_and_snapshot`, `test_p0_cr_005_heating_state_invariants` | H-pass, B-pass |
-| CR-006 | M2 current/M8 specified | M2 retains the simple deterministic 100/0 controller; D055/M8 select a future exact-pinned `espressif/pid_ctrl` platform adapter whose normalized request remains before the safety gate | `test_m2`; planned M8 adapter, timing/allocation, reset/OFF, ESP32-S3, and real-plant tuning tests | M2 H-pass/B-pass; Deferred M8, HW-pending tuning |
+| CR-006 | M2 production/M8 adapter inactive | `IChamberController` now owns the application request boundary; production explicitly composes the deterministic 100/0 adapter, while exact-pinned `pid_ctrl` 0.3.1 float code is target-only and uncomposed; requested demand remains before synchronous safety/gate/write | `test_m2`, `test_deterministic_production_adapter_preserves_m2_behavior`, focused M8 configuration/error/reset/failure/safety tests; ESP-IDF API cross-build | H-pass, B-pass inactive adapter, Guardrail; real cadence/tuning/SSR HW-pending M6B/M7/M8 |
 
 ## Safety rules
 
@@ -167,6 +170,27 @@ or electrical evidence.
 | project-owned read code has no explicit wait/allocation | common and target read code contains no explicit delay, task creation, heap allocation, or `max31865_measure()` call | `test_max31865_read_is_observed_allocation_free`; `tools/check_architecture.py` | H-pass ordinary-C++ allocation observation, Guardrail; ESP-IDF/driver allocation and real SPI worst-case blocking unproven |
 | pinned API is exercised but inactive | target-only RAII backend uses the tested readiness policy before descriptor fault/temperature APIs in provisional continuous mode; `main`/runtime still compose `SimulatedChamberSensor` and contain no concrete SPI bus/GPIO | target compilation and architecture guardrail | B-pass API compatibility, Guardrail; bus ownership/timing and physical validation HW-pending |
 | board diagnostic is isolated, quiescent at ownership release, and evidence-bounded | Kconfig defaults OFF; its overlay uses a separate sdkconfig/build output; diagnostic and ordinary `app_main` branches are compile-time exclusive; the diagnostic rejects pull-following MISO, performs ten raw/fault samples without a temperature API, and distinguishes sensor faults from transaction/shutdown failure. Software-SPI and the driver write/read exact command-zero terminal `0x11` before release; normal driver shutdown is checked/idempotent, early returns have bounded RAII fallback, software-SPI restores a CS-high frame boundary after partial transfer, descriptor removal is still attempted before bus release, and the unbounded driver fault-detect helper is absent | `tools/check_architecture.py`; separate ordinary/diagnostic ESP-IDF 6.0.2 builds, strict-C++20 checks, and link-map/ELF inspection | B-pass, Guardrail for intended sequence only; no flash/monitor, connected write/readback, or physical-quiescence evidence |
+
+## Inactive M8 PID software-integration contracts
+
+These checks cover the application controller boundary, a platform PID policy,
+and ESP-IDF 6.0.2 source/API compatibility only. Production still uses the
+deterministic adapter and simulated heater. M6B, M7, M8, and M9 remain
+incomplete; no row is cadence, tuning, SSR, thermal, electrical, or independent
+safety evidence.
+
+| Contract | Implementation evidence | Test/evidence | Validation |
+|---|---|---|---|
+| dependency is exact and reproducible | platform manifest pins `espressif/pid_ctrl ==0.3.1`; lock records hash `974be066...d4979`, mandatory `espressif/iqmath` 1.11.0~1 hash `39448db7...1b9d`, and IDF 6.0.2; the optional source check fails cleanly on partial/corrupt generated inputs while remaining offline when all managed components are absent | Component Manager resolution; lock/optional managed-source architecture guardrail and negative fixtures | B-pass, Guardrail |
+| application boundary is typed and platform-free | injected synchronous `IChamberController` accepts authoritative/target `Temperature`, returns optional typed `HeaterDemand`, and reports reset failure; no PID/ESP-IDF type enters core/app | explicit construction-site build coverage; `tools/check_architecture.py` | H-pass, B-pass, Guardrail |
+| form-specific configuration and error sign are explicit | project temperature/demand and ESP32-S3 hardware evidence favor float; common adapter calculates `target - measured`; positional requires finite ordered accumulated-error bounds containing zero; incremental exposes none and rejects contradictory bounds; common normalized output bounds remain explicit | `test_valid_positional_configuration_with_accumulated_error_bounds`, `test_invalid_common_and_positional_configurations`, `test_valid_incremental_configuration_has_no_integral_bound_promise`, `test_incremental_configuration_rejects_contradictory_positional_bounds`, `test_target_minus_measurement_and_normalized_output` | H-pass, B-pass; neither form/gains production-selected |
+| upstream form semantics remain exact | positional accumulates/clamps raw per-call error then applies Ki; incremental ignores accumulator/bounds and retains/clamps output; target maps ignored incremental fields to `0/0`; both differentiate error with implicit per-call gains and no derivative filtering/on-measurement | optional exact-pinned managed-source semantic guardrail; target mapping source check | Guardrail; setpoint-kick/cadence/form tuning HW-pending |
+| backend failures/results fail closed | initialization/compute/reset failure, non-finite output, and output outside configured normalized bounds are explicit failure rather than valid OFF/on demand | `test_backend_initialization_failure`, `test_backend_compute_and_output_failures`, `test_reset_failure_and_steady_allocation_without_destructor_reset` | H-pass, B-pass |
+| lifecycle ownership and steady paths are bounded | target-only non-copyable RAII owner calls exact float create/compute/reset/delete APIs; wrapper destruction relies on backend RAII release rather than an ignored reset; upstream `calloc` is confined to creation; valid reviewed compute/reset and project paths have no intentional allocation/task/I/O/log/delay/wait/lock | allocation observation in `test_reset_failure_and_steady_allocation_without_destructor_reset`; managed-source and project-source guardrails; API cross-build | H-pass ordinary-C++ observation, B-pass, Guardrail; target worst-case timing unproven |
+| reset/failure/safety ordering remains authoritative | construction writes observable OFF before the first controller reset callback without substituting for real-driver safe initialization; request/reset share a no-I/O/wait/block/task/steady-allocation contract; effective transitions from eligible RUNNING reset; request precedes safety, gate, and sole write; compute/reset failure latches `ControlLoopFailure`; clear leaves STOPPED and Start is explicit | `test_constructor_writes_observable_off_before_first_controller_reset`, `test_application_off_reset_and_stop_lifecycle`, `test_invalid_measurement_fault_resets_and_never_resumes`, `test_compute_failure_latches_and_requires_clear_then_start`, `test_reset_failure_fails_closed_and_can_only_resolve_latched_fault`, `test_safety_overrides_positive_request_before_only_write`, `test_firmware_update_interlock_never_calls_controller` | H-pass, B-pass, Guardrail; real heater/safety HW-pending |
+| same-tick target commands use existing final-state semantics | non-Stop commands drain before one control evaluation; remove then restore leaves a present final target, while RR-003 forces OFF only when target is absent at evaluation; SR-003/D031 define the sole explicit command-batch OFF barrier for accepted manual Stop | `test_same_tick_target_removal_and_restoration_uses_final_state`; BR/RR/SR/D031 review | H-pass, B-pass |
+| production behavior remains M2 simulated | `SimulationContext` constructs `DeterministicChamberController` plus all three simulated I/O adapters; PID backend and SSR output are absent from `main`/runtime composition | `test_deterministic_production_adapter_preserves_m2_behavior`, `test_m2`; architecture guardrail | H-pass, B-pass, Guardrail |
+| autotuning and production approval claims are absent | reviewed 0.3.1 has float/IQmath and positional/incremental forms, but no autotuning, plant identification, sample period, `dt`, derivative filter, or derivative-on-measurement; no form, tuning code/default/result is approved | optional managed-source semantic guardrail; D055/roadmap/source review | Guardrail; future hardware-backed tuning decision |
 
 ## Inactive M9 dual-ADS1115 software-integration contracts
 
@@ -266,7 +290,10 @@ The following cannot be closed by M0-M5:
 - identify sensor/probe frontends, SSR/power interface, final external pin
   assignments, and independent safety protection at M6B;
 - validate real authoritative sensor behavior at M7;
-- validate real heater output and electrical safe state at M8;
+- bind PID calls/gains to a validated real cadence, select calculation form and
+  tuning policy on the real thermal plant, and validate real SSR/heater output,
+  independent cutoff, and electrical safe state at M8; the inactive adapter and
+  simulated tests close none of those gates;
 - validate persistence, reset reason, and `resumeAfterPowerFailure` at M10;
 - validate M12 AP/STA provisioning, automatic captive opening, real scan and
   hidden-SSID/wrong-password fallback, mDNS, authentication, Wi-Fi-loss

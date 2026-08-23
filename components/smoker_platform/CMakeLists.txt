@@ -8,6 +8,7 @@ set(smoker_platform_sources
     "src/history_support.cpp"
     "src/local_network_support.cpp"
     "src/max31865_sensor.cpp"
+    "src/pid_chamber_controller.cpp"
     "src/runtime_transport_support.cpp"
     "src/simulated_adapters.cpp"
     "src/wall_clock.cpp"
@@ -21,6 +22,7 @@ if(ESP_PLATFORM)
         "src/history_service.cpp"
         "src/local_connectivity.cpp"
         "src/max31865_target_backend.cpp"
+        "src/pid_target_backend.cpp"
         "src/simulation_runtime.cpp"
     )
     if(CONFIG_SMOKER_MAX31865_CONNECTED_DIAGNOSTIC)
@@ -45,6 +47,7 @@ if(ESP_PLATFORM)
             esp_timer
             esp_wifi
             mqtt
+            espressif__pid_ctrl
             esp-idf-lib__ads111x
             esp-idf-lib__max31865
             espressif__cjson

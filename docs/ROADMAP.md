@@ -20,12 +20,12 @@ A future item is **not permission to implement it early**.
   modules/revisions, remaining PT100 and probe-frontend facts, address straps,
   connectors, probe GPIOs, and connected validation remain open. SSR, power,
   and independent-protection hardware are still blocked on exact parts.
-- **M6B and M7-M10 — remaining controller product baseline:** incomplete. M7
-  and M9 now have inactive host-tested/cross-buildable MAX31865 and dual-ADS1115
-  software boundaries, but production remains simulated and physical activation
-  stays gated by M6B. Product V0 cannot be called complete before real sensing/
-  output, food probes, persistence, and recovery are implemented and validated
-  at their appropriate levels.
+- **M6B and M7-M10 — remaining controller product baseline:** incomplete. M7,
+  M8, and M9 now have inactive host-tested/cross-buildable MAX31865, PID, and
+  dual-ADS1115 software boundaries, but production remains deterministic and
+  simulated and physical activation stays gated by M6B. Product V0 cannot be
+  called complete before real sensing/output, food probes, persistence, and
+  recovery are implemented and validated at their appropriate levels.
 - **M11 — local display:** postponed because no display has been purchased.
 - **M12 — Wi-Fi + local API/UI:** implemented for the simulated controller and
   host/cross-build validated; physical radio/provisioning/runtime validation on
@@ -285,29 +285,63 @@ Requires the chamber-sensor/frontend portion of M6B.
 
 ## M8 — Real SSR heater output + PID control
 
+Status: **First software-integration slice implemented but inactive — the
+application boundary and exact-pinned float PID adapter are host-tested and
+ESP-IDF 6.0.2 cross-buildable; production remains deterministic/simulated and
+all cadence, tuning, SSR, thermal-plant, and hardware-safety evidence remains
+pending.**
+
 Implement real platform heater driver.
 
-Replace the M2 simulation's deterministic 100/0 control choice with an adapter
-over Espressif's official `espressif/pid_ctrl` component. Add that Component
-Registry dependency only when M8 implementation begins, pin its exact reviewed
-version and lockfile hash, and keep it outside `smoker_core`.
+The first inactive slice adds `espressif/pid_ctrl` exactly 0.3.1 at component
+hash `974be0666bb4d95f49677327dd8305781d04d8bae284fdde2fbadf06ca9d4979`.
+Its mandatory `espressif/iqmath` 1.11.0~1 dependency is locked at
+`39448db759b410373e543798167ca4670bbff3019cb290a2fe8e627221e71b9d`.
+The PID component and ESP-IDF types remain target-only in `smoker_platform`.
 
-The PID adapter runs synchronously inside the existing `ControlTask`; it must
-not create a PID task, perform I/O, block, or allocate during computation. It
-returns normalized `0..100%` heater demand, after which the existing synchronous
-safety gate remains authoritative. SSR switching/window timing remains a
-separate platform heater-output concern.
+`SmokerApplication` now obtains requested demand through injected
+`IChamberController`. Ordinary production composition explicitly uses
+`DeterministicChamberController`, preserving the M2 100/0 behavior with
+`SimulatedChamberSensor`, `SimulatedFoodProbeSource`, and
+`SimulatedHeaterOutput`. The real float PID adapter is compiled but not composed.
+No SSR output, GPIO, or switching window exists.
 
-Select and validate the numeric backend, PID form, sample period, gains,
-integral/output bounds, reset behavior, and SSR window using the identified
-sensor, heater, smoker, and protection hardware. Do not invent tuning values
-from the M2 simulation.
+The PID adapter is synchronous and creates no PID task, I/O, delay, wait, lock,
+or steady-state project allocation. It fixes error direction as target minus
+measured and returns only a valid normalized 0..100% request. Compute/reset
+failure fails closed as latched `ControlLoopFailure`. Safety is evaluated after
+the request and remains authoritative before the only heater write. Boot and
+every transition out of eligible RUNNING control reset/disable latent state;
+fault clear never restarts heating and a clean explicit Start remains required.
+
+The selected numeric backend is float: the project domain boundary already
+uses float, and ESP-IDF 6.0.2 records single-precision FPU support for ESP32-S3.
+The target RAII owner uses the exact 0.3.1 `_f` create/compute/reset/delete APIs.
+Creation allocates the upstream control block during initialization; reviewed
+valid compute/reset paths intentionally do not allocate.
+
+The component provides positional and incremental forms but no autotuning,
+plant identification, sample-period, or `dt` input. Positional form accumulates
+and clamps raw per-call error before applying Ki; incremental form ignores those
+bounds and instead retains/clamps output. Project configuration exposes the
+accumulated-error bounds only for positional form and maps the ignored upstream
+incremental fields to `0/0`. Both forms differentiate error with no derivative
+filtering or derivative-on-measurement, so target-minus-measured input permits
+setpoint kick. Calculation form, real call period, gains, positional
+accumulated-error bounds, common output bounds, derivative treatment, and SSR
+window must be selected and validated using the identified sensor, heater,
+smoker, and protection hardware. Neither form is production-approved.
+Automatic tuning is a separate future decision. Do not infer tuning values from
+M2 simulation or present any simulated result as a production recommendation.
 
 Do not bypass the approved safety gate.
 
 Electrical work must respect independent hardware safety design.
 
 Requires M7 plus the SSR/heater and independent-protection portions of M6B.
+
+The inactive software slice does not satisfy those activation prerequisites;
+M6B, M7, M8, and M9 remain incomplete.
 
 Definition of done:
 

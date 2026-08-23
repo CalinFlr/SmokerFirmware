@@ -453,6 +453,26 @@ recording and recovery policy remain M10 work.
 Do not turn a cross-build, module datasheet, or development-board result into a
 claim about an untested final product board.
 
+## Inactive M8 software-selection note
+
+The exact-pinned `espressif/pid_ctrl` 0.3.1 float backend is a
+**CONFIRMED FROM CONFIG** software choice only. It is compiled behind an
+application port but is not composed in production; the deterministic 100/0
+controller and `SimulatedHeaterOutput` remain active. No PID form, physical
+gain, call period, positional accumulated-error bound, common output limit,
+derivative treatment, autotuning method, SSR window, GPIO, or heater interface
+has been selected. Positional form accumulates/clamps error; incremental form
+instead retains/clamps output and has no project-visible integral-bound promise.
+Both differentiate error without filtering or derivative-on-measurement. The
+component has no `dt` or autotuning API, so real cadence binding, setpoint-kick
+assessment, and any tuning approach remain separate M8 gates.
+
+This software evidence does not update `HEATER-001`, `SAFETY-001`, or
+`POWER-001`: all remain **UNCONFIRMED**. Automatic tuning cannot be evaluated
+safely before the real chamber sensor, SSR/heater, smoker thermal plant, and
+independent cutoff are available and validated. Simulated coefficients/results
+must not be treated as production recommendations.
+
 ## M6B — External-hardware checklist
 
 Record with component identifiers, interface requirements, and electrical

@@ -52,9 +52,11 @@ public:
         , probes{std::move(configuration.food_probe)}
         , chamber{ambient}
         , food_source{probes}
+        , chamber_controller{}
         , application{
               chamber,
               food_source,
+              chamber_controller,
               heater,
               clock,
               events,
@@ -91,6 +93,7 @@ public:
     std::array<core::FoodProbeConfig, 1U> probes;
     SimulatedChamberSensor chamber;
     SimulatedFoodProbeSource food_source;
+    DeterministicChamberController chamber_controller;
     SimulatedHeaterOutput heater;
     SimulatedClock clock;
     SimulatedEventSink events;

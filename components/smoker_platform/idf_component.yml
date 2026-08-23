@@ -3,5 +3,6 @@ dependencies:
   espressif/cjson: "==1.7.19"
   espressif/mdns: "==1.8.2"
   espressif/mqtt: "==1.0.0"
+  espressif/pid_ctrl: "==0.3.1"
   esp-idf-lib/max31865: "==1.0.8"
   esp-idf-lib/ads111x: "==1.1.14"

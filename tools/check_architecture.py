@@ -724,9 +724,15 @@ def check_m12_transport_contract(failures: CheckFailures) -> None:
         in decisions
         and "espressif/pid_ctrl" in decisions
         and "0.3.1" in decisions
-        and "not added before M8" in decisions
+        and "974be0666bb4d95f49677327dd8305781d04d8bae284fdde2fbadf06ca9d4979"
+            in decisions
+        and "39448db759b410373e543798167ca4670bbff3019cb290a2fe8e627221e71b9d"
+            in decisions
         and "smoker_platform" in decisions
-        and "synchronous safety gate is applied after PID computation" in decisions,
+        and "Production explicitly composes a deterministic adapter" in decisions
+        and "synchronous safety evaluation and gate occur after requested-demand"
+            in decisions
+        and "automatic tuning is a separate future decision" in decisions,
         "D055 must preserve the exact-pinned official PID component, pure-core, and safety-gate boundaries",
     )
     failures.require(
@@ -1220,6 +1226,346 @@ def check_m7_max31865_contract(failures: CheckFailures) -> None:
         "test_max31865_premature_application_tick_latches_fault_and_heater_off",
     ):
         failures.require(evidence in tests, f"M7 host evidence is missing: {evidence}")
+
+
+def check_m8_pid_contract(failures: CheckFailures) -> None:
+    platform = ROOT / "components/smoker_platform"
+    port_header = (
+        ROOT / "components/smoker_app/include/smoker/app/ports.hpp"
+    ).read_text()
+    application_header = (
+        ROOT / "components/smoker_app/include/smoker/app/smoker_application.hpp"
+    ).read_text()
+    application = (
+        ROOT / "components/smoker_app/src/smoker_application.cpp"
+    ).read_text()
+    controller_header = (
+        platform / "include/smoker/platform/pid_chamber_controller.hpp"
+    ).read_text()
+    controller = (platform / "src/pid_chamber_controller.cpp").read_text()
+    target_header = (
+        platform / "include/smoker/platform/pid_target_backend.hpp"
+    ).read_text()
+    target = (platform / "src/pid_target_backend.cpp").read_text()
+    simulated_header = (
+        platform / "include/smoker/platform/simulated_adapters.hpp"
+    ).read_text()
+    simulated = (platform / "src/simulated_adapters.cpp").read_text()
+    runtime = (platform / "src/simulation_runtime.cpp").read_text()
+    main_source = (ROOT / "main/app_main.cpp").read_text()
+    platform_cmake = (platform / "CMakeLists.txt").read_text()
+    manifest = (platform / "idf_component.yml").read_text()
+    lock = (ROOT / "dependencies.lock").read_text()
+    pid_lock = source_section(
+        lock, "  espressif/pid_ctrl:\n", "  idf:\n"
+    )
+    iqmath_lock = source_section(
+        lock, "  espressif/iqmath:\n", "  espressif/mdns:\n"
+    )
+    tests_cmake = (ROOT / "tests/CMakeLists.txt").read_text()
+    tests = (ROOT / "tests/host/smoker_m8_tests.cpp").read_text()
+
+    lower_layer_text = "\n".join(
+        path.read_text()
+        for path in source_files("components/smoker_core", "components/smoker_app")
+    )
+    failures.require(
+        "pid_ctrl.h" not in lower_layer_text
+        and "pid_ctrl_" not in lower_layer_text
+        and "esp_err" not in lower_layer_text,
+        "pid_ctrl and ESP-IDF types must remain outside smoker_core/smoker_app",
+    )
+    failures.require(
+        "class IChamberController" in port_header
+        and "std::optional<core::HeaterDemand> request(" in port_header
+        and "core::Temperature chamber_temperature" in port_header
+        and "core::Temperature chamber_target" in port_header
+        and "bool reset() noexcept" in port_header
+        and "critical lifecycle path" in port_header
+        and port_header.count("wait or block") >= 2
+        and port_header.count("create tasks") >= 2
+        and port_header.count("allocate") >= 2
+        and port_header.count("steady state") >= 2
+        and "IChamberController& chamber_controller" in application_header,
+        "the application controller port must be synchronous, typed, resettable, ESP-IDF-free, and prohibit blocking/side effects/allocation in request and reset",
+    )
+    failures.require(
+        'espressif/pid_ctrl: "==0.3.1"' in manifest
+        and "espressif__pid_ctrl" in platform_cmake
+        and "component_hash: 974be0666bb4d95f49677327dd8305781d04d8bae284fdde2fbadf06ca9d4979"
+        in pid_lock
+        and "version: 0.3.1" in pid_lock
+        and "name: espressif/iqmath" in pid_lock
+        and "component_hash: 39448db759b410373e543798167ca4670bbff3019cb290a2fe8e627221e71b9d"
+        in iqmath_lock
+        and "version: 1.11.0~1" in iqmath_lock,
+        "M8 must retain the exact pid_ctrl 0.3.1 pin and actual locked component/transitive hashes",
+    )
+    failures.require(
+        '"src/pid_chamber_controller.cpp"' in platform_cmake
+        and '"src/pid_target_backend.cpp"' in platform_cmake
+        and platform_cmake.find('"src/pid_target_backend.cpp"')
+            > platform_cmake.find("if(ESP_PLATFORM)"),
+        "the PID policy must be host-buildable and the real pid_ctrl backend target-only",
+    )
+    failures.require(
+        "class PidChamberController final : public app::IChamberController"
+            in controller_header
+        and "class IPidControllerBackend" in controller_header
+        and "struct PositionalAccumulatedErrorBounds" in controller_header
+        and "positional_accumulated_error_bounds" in controller_header
+        and "PidCalculationForm::Positional" in controller
+        and "PidCalculationForm::Incremental" in controller
+        and "return !configuration.positional_accumulated_error_bounds" in controller
+        and "std::isfinite" in controller
+        and "chamber_target.celsius() - chamber_temperature.celsius()"
+            in controller
+        and "core::HeaterDemand::from_percent(output_percent)" in controller,
+        "the host PID boundary must validate explicit configuration, sign, and normalized output",
+    )
+    failures.require(
+        "value_or(" in target
+        and "PositionalAccumulatedErrorBounds{0.0F, 0.0F}" in target
+        and ".max_integral = positional_bounds.maximum" in target
+        and ".min_integral = positional_bounds.minimum" in target,
+        "the target PID backend must map ignored incremental integral fields deterministically to 0/0",
+    )
+    for api in (
+        "pid_new_control_block_f(",
+        "pid_compute_f(",
+        "pid_reset_ctrl_block_f(",
+        "pid_del_control_block_f(",
+    ):
+        failures.require(api in target, f"the target PID backend must call exact API {api}")
+    failures.require(
+        "pid_ctrl_block_handle_f_t" in target_header
+        and "~EspressifPidFloatBackend()" in target
+        and "release();" in target
+        and "EspressifPidFloatBackend(const EspressifPidFloatBackend&) = delete"
+            in target_header,
+        "the target float PID backend must retain non-copyable RAII lifecycle ownership",
+    )
+    failures.require(
+        "~PidChamberController" not in controller_header
+        and "PidChamberController::~PidChamberController" not in controller,
+        "application-owned reported resets plus target-backend RAII release must own PID lifecycle; the common wrapper must not hide a destructor reset failure",
+    )
+
+    constructor = source_section(
+        application,
+        "SmokerApplication::SmokerApplication(",
+        "bool SmokerApplication::submit(",
+    )
+    constructor_off_position = constructor.find(
+        "heater_output_.write(core::HeaterDemand::off())"
+    )
+    constructor_reset_position = constructor.find("reset_chamber_controller()")
+    failures.require(
+        constructor_off_position >= 0
+        and constructor_reset_position > constructor_off_position,
+        "SmokerApplication construction must issue observable heater OFF before the first chamber-controller reset callback",
+    )
+
+    tick = source_section(application, "void SmokerApplication::tick()", "SmokerSnapshot SmokerApplication::snapshot()")
+    request_position = tick.find("chamber_controller_.request(")
+    safety_position = tick.find("evaluate_safety(now)")
+    gate_position = tick.find("core::apply_safety_gate(")
+    write_position = tick.find("heater_output_.write(heater_demand_)")
+    failures.require(
+        request_position >= 0
+        and safety_position > request_position
+        and gate_position > safety_position
+        and write_position > gate_position
+        and "ControlLoopFailure" in tick
+        and "reset_chamber_controller()" in tick,
+        "controller request must precede authoritative safety/gate/write with fail-closed reset handling",
+    )
+    failures.require(
+        "class DeterministicChamberController final : public app::IChamberController"
+            in simulated_header
+        and "core::calculate_heater_demand" in simulated
+        and "DeterministicChamberController chamber_controller" in runtime
+        and "chamber_controller," in runtime
+        and "PidChamberController" not in runtime
+        and "EspressifPidFloatBackend" not in runtime
+        and "PidChamberController" not in main_source
+        and "EspressifPidFloatBackend" not in main_source
+        and "SimulatedHeaterOutput heater" in runtime,
+        "production must retain deterministic 100/0 simulated composition without PID/SSR activation",
+    )
+
+    project_pid_paths = [
+        controller_header,
+        controller,
+        target_header,
+        target,
+    ]
+    forbidden_patterns = (
+        r"\bxTaskCreate",
+        r"\bvTaskDelay\s*\(",
+        r"\bxTaskDelay",
+        r"\bsleep\s*\(",
+        r"\busleep\s*\(",
+        r"\bmalloc\s*\(",
+        r"\bcalloc\s*\(",
+        r"\brealloc\s*\(",
+        r"\boperator\s+new",
+        r"\bESP_LOG",
+        r"\bprintf\s*\(",
+        r"\bfprintf\s*\(",
+        r"\bfopen\s*\(",
+        r"\bsocket\s*\(",
+        r"\bmutex",
+    )
+    for pattern in forbidden_patterns:
+        failures.require(
+            all(re.search(pattern, text, re.IGNORECASE) is None for text in project_pid_paths),
+            f"project-owned PID paths must not contain side effect/allocation pattern {pattern}",
+        )
+
+    failures.require(
+        'add_executable(smoker_m8_tests' in tests_cmake
+        and "smoker_v0.m8_pid" in tests_cmake,
+        "the focused M8 host group must be registered",
+    )
+    for evidence in (
+        "test_valid_positional_configuration_with_accumulated_error_bounds",
+        "test_invalid_common_and_positional_configurations",
+        "test_valid_incremental_configuration_has_no_integral_bound_promise",
+        "test_incremental_configuration_rejects_contradictory_positional_bounds",
+        "test_backend_initialization_failure",
+        "test_target_minus_measurement_and_normalized_output",
+        "test_backend_compute_and_output_failures",
+        "test_reset_failure_and_steady_allocation_without_destructor_reset",
+        "test_constructor_writes_observable_off_before_first_controller_reset",
+        "test_application_off_reset_and_stop_lifecycle",
+        "test_same_tick_target_removal_and_restoration_uses_final_state",
+        "test_invalid_measurement_fault_resets_and_never_resumes",
+        "test_compute_failure_latches_and_requires_clear_then_start",
+        "test_reset_failure_fails_closed_and_can_only_resolve_latched_fault",
+        "test_safety_overrides_positive_request_before_only_write",
+        "test_firmware_update_interlock_never_calls_controller",
+        "test_deterministic_production_adapter_preserves_m2_behavior",
+    ):
+        failures.require(evidence in tests, f"M8 host evidence is missing: {evidence}")
+
+    managed = ROOT / "managed_components/espressif__pid_ctrl"
+    managed_iqmath = ROOT / "managed_components/espressif__iqmath"
+    managed_inputs = (
+        managed / ".component_hash",
+        managed / "include/pid_ctrl.h",
+        managed / "src/pid_ctrl_f.c",
+        managed_iqmath / ".component_hash",
+    )
+    if managed.exists() or managed_iqmath.exists() or any(
+        path.exists() for path in managed_inputs
+    ):
+        missing_inputs = [relative(path) for path in managed_inputs if not path.is_file()]
+        failures.require(
+            not missing_inputs,
+            "managed PID guardrail inputs are partially present; missing "
+            + ", ".join(missing_inputs),
+        )
+        if missing_inputs:
+            return
+
+        try:
+            component_hash = managed_inputs[0].read_text().strip()
+            upstream_header = managed_inputs[1].read_text()
+            upstream_float = managed_inputs[2].read_text()
+            iqmath_hash = managed_inputs[3].read_text().strip()
+        except (OSError, UnicodeError) as error:
+            failures.require(
+                False,
+                f"managed PID guardrail inputs could not be read as text: {error}",
+            )
+            return
+
+        failures.require(
+            component_hash
+                == "974be0666bb4d95f49677327dd8305781d04d8bae284fdde2fbadf06ca9d4979",
+            "present managed pid_ctrl source must match the locked component hash",
+        )
+        failures.require(
+            iqmath_hash
+                == "39448db759b410373e543798167ca4670bbff3019cb290a2fe8e627221e71b9d",
+            "present managed iqmath dependency must match the locked component hash",
+        )
+        failures.require(
+            all(api in upstream_header for api in (
+                "pid_new_control_block_f(", "pid_compute_f(",
+                "pid_reset_ctrl_block_f(", "pid_del_control_block_f(",
+                "pid_new_control_block_iq(", "PID_CAL_TYPE_INCREMENTAL",
+                "PID_CAL_TYPE_POSITIONAL",
+            ))
+            and not re.search(
+                r"autotun|plant.ident|sample.period|delta.time|\bdt\b",
+                upstream_header,
+                re.IGNORECASE,
+            ),
+            "present managed pid_ctrl API must retain reviewed backends/forms and no dt/autotune surface",
+        )
+        positional = source_section(
+            upstream_float,
+            "static float pid_calc_positional_f(",
+            "static float pid_calc_incremental_f(",
+        )
+        incremental = source_section(
+            upstream_float,
+            "static float pid_calc_incremental_f(",
+            "esp_err_t pid_update_parameters_f(",
+        )
+        failures.require(
+            "pid->integral_err += error" in positional
+            and "pid->integral_err = pid_clamp_f(" in positional
+            and "pid->min_integral" in positional
+            and "pid->max_integral" in positional
+            and "pid->integral_err * pid->ki" in positional
+            and "(error - pid->previous_err1) * pid->kd" in positional,
+            "present managed positional PID must accumulate/clamp raw per-call error, multiply it by Ki, and differentiate error",
+        )
+        failures.require(
+            incremental
+            and all(token not in incremental for token in (
+                "integral_err", "min_integral", "max_integral",
+            ))
+            and "pid->last_output" in incremental
+            and "pid_clamp_f(output, pid->min_output, pid->max_output)"
+                in incremental
+            and "error - pid->previous_err1 - pid->previous_err1 + pid->previous_err2"
+                in incremental
+            and "pid->last_output = output" in incremental,
+            "present managed incremental PID must ignore integral-limit fields, differentiate error, and retain/clamp last output",
+        )
+        unsupported_surface = upstream_header + "\n" + upstream_float
+        failures.require(
+            "pid_compute_f(pid_ctrl_block_handle_f_t pid, float input_error, float *ret_result)"
+                in upstream_header
+            and not re.search(
+                r"autotun|plant.ident|derivative.?filter|derivative.?on.?measurement|sample.?time|delta.?time|\bdt\b",
+                unsupported_surface,
+                re.IGNORECASE,
+            ),
+            "present managed PID must retain an error-only per-call API with no dt, derivative filter/on-measurement, autotuning, or plant-identification surface",
+        )
+        creation = source_section(
+            upstream_float,
+            "esp_err_t pid_new_control_block_f(",
+            "esp_err_t pid_del_control_block_f(",
+        )
+        compute = source_section(
+            upstream_float,
+            "esp_err_t pid_compute_f(",
+            "esp_err_t pid_reset_ctrl_block_f(",
+        )
+        reset = upstream_float.partition("esp_err_t pid_reset_ctrl_block_f(")[2]
+        failures.require(
+            "calloc(" in creation
+            and all(token not in compute + reset for token in (
+                "calloc(", "malloc(", "realloc(", "free(",
+            )),
+            "present managed float source must allocate at creation, not valid compute/reset",
+        )
 
 
 def check_m9_ads1115_contract(failures: CheckFailures) -> None:
@@ -1810,6 +2156,7 @@ def main() -> int:
     check_reproducible_build_contract(failures)
     check_m12_transport_contract(failures)
     check_m7_max31865_contract(failures)
+    check_m8_pid_contract(failures)
     check_m9_ads1115_contract(failures)
     check_m14_history_contract(failures)
     check_m15_blynk_contract(failures)

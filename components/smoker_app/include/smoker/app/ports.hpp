@@ -20,6 +20,23 @@ public:
     [[nodiscard]] virtual std::optional<core::Temperature> read(core::ProbeId probe_id) noexcept = 0;
 };
 
+class IChamberController {
+public:
+    virtual ~IChamberController() = default;
+    // Computes one normalized requested demand synchronously. Absence is an
+    // explicit controller failure, not an OFF request. Implementations must
+    // not perform I/O, wait or block, create tasks, or allocate in steady state.
+    [[nodiscard]] virtual std::optional<core::HeaterDemand> request(
+        core::Temperature chamber_temperature,
+        core::Temperature chamber_target
+    ) noexcept = 0;
+    // Clears/disables latent controller state in the critical lifecycle path.
+    // It must not perform I/O, wait or block, create tasks, or allocate in
+    // steady state. false is a fail-closed control failure; callers may retry
+    // reset while the fault remains latched.
+    [[nodiscard]] virtual bool reset() noexcept = 0;
+};
+
 class IHeaterOutput {
 public:
     virtual ~IHeaterOutput() = default;
