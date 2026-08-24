@@ -68,6 +68,9 @@ using smoker::platform::Max31865InitializationStatus;
 using smoker::platform::Max31865ReadResult;
 using smoker::platform::Max31865ReadStatus;
 
+constexpr smoker::platform::Max31865TemperatureValidityPolicy
+    supplier_documented_validity{-50.0F, 200.0F};
+
 class FakeMonotonicClock final : public smoker::app::IClock {
 public:
     [[nodiscard]] smoker::core::MonotonicTimePoint now() const noexcept override
@@ -218,6 +221,80 @@ void test_max31865_configuration_policy_requires_explicit_valid_values()
     assert(!valid_max31865_conversion_configuration(invalid));
 }
 
+void test_max31865_temperature_validity_policy_is_finite_ordered_and_inclusive()
+{
+    using smoker::platform::Max31865TemperatureValidityPolicy;
+    using smoker::platform::valid_max31865_temperature_validity_policy;
+
+    assert(valid_max31865_temperature_validity_policy(
+        supplier_documented_validity
+    ));
+    for (const auto invalid : std::array{
+             Max31865TemperatureValidityPolicy{200.0F, -50.0F},
+             Max31865TemperatureValidityPolicy{-50.0F, -50.0F},
+             Max31865TemperatureValidityPolicy{
+                 std::numeric_limits<float>::quiet_NaN(), 200.0F,
+             },
+             Max31865TemperatureValidityPolicy{
+                 -50.0F, std::numeric_limits<float>::quiet_NaN(),
+             },
+             Max31865TemperatureValidityPolicy{
+                 -std::numeric_limits<float>::infinity(), 200.0F,
+             },
+             Max31865TemperatureValidityPolicy{
+                 -50.0F, std::numeric_limits<float>::infinity(),
+             },
+         }) {
+        assert(!valid_max31865_temperature_validity_policy(invalid));
+        FakeMax31865Backend backend{
+            Max31865InitializationStatus::ConfiguredAwaitingFirstSample,
+        };
+        smoker::platform::Max31865ChamberSensor sensor{backend, invalid};
+        assert(!sensor.configured());
+        assert(!sensor.read().has_value());
+        assert(backend.initialization_calls == 0U);
+        assert(backend.read_calls == 0U);
+    }
+}
+
+void test_max31865_temperature_validity_accepts_boundaries_and_rejects_outside()
+{
+    const std::array results{
+        Max31865ReadResult{Max31865ReadStatus::Valid, -50.0F},
+        Max31865ReadResult{Max31865ReadStatus::Valid, 200.0F},
+        Max31865ReadResult{Max31865ReadStatus::Valid, -50.001F},
+        Max31865ReadResult{Max31865ReadStatus::Valid, 200.001F},
+        Max31865ReadResult{Max31865ReadStatus::Valid, -242.02F},
+        Max31865ReadResult{Max31865ReadStatus::Valid, 31.3F},
+        Max31865ReadResult{
+            Max31865ReadStatus::Valid,
+            std::numeric_limits<float>::infinity(),
+        },
+        Max31865ReadResult{
+            Max31865ReadStatus::Valid,
+            std::numeric_limits<float>::quiet_NaN(),
+        },
+    };
+    FakeMax31865Backend backend{
+        Max31865InitializationStatus::ConfiguredAwaitingFirstSample, results,
+    };
+    smoker::platform::Max31865ChamberSensor sensor{
+        backend, supplier_documented_validity,
+    };
+
+    const auto minimum = sensor.read();
+    assert(minimum && minimum->celsius() == -50.0F);
+    const auto maximum = sensor.read();
+    assert(maximum && maximum->celsius() == 200.0F);
+    assert(!sensor.read().has_value());
+    assert(!sensor.read().has_value());
+    assert(!sensor.read().has_value());
+    const auto ambient = sensor.read();
+    assert(ambient && ambient->celsius() == 31.3F);
+    assert(!sensor.read().has_value());
+    assert(!sensor.read().has_value());
+}
+
 void test_max31865_60_hz_first_conversion_boundary()
 {
     using namespace std::chrono_literals;
@@ -267,7 +344,9 @@ void test_max31865_initialization_and_configuration_failures_are_absent()
     };
     for (const auto failure : failures) {
         FakeMax31865Backend backend{failure};
-        smoker::platform::Max31865ChamberSensor sensor{backend};
+        smoker::platform::Max31865ChamberSensor sensor{
+            backend, supplier_documented_validity,
+        };
         assert(!sensor.configured());
         assert(!sensor.read().has_value());
         assert(backend.initialization_calls == 1U);
@@ -296,7 +375,9 @@ void test_max31865_read_policy_never_reuses_a_previous_value()
         Max31865InitializationStatus::ConfiguredAwaitingFirstSample,
         results,
     };
-    smoker::platform::Max31865ChamberSensor sensor{backend};
+    smoker::platform::Max31865ChamberSensor sensor{
+        backend, supplier_documented_validity,
+    };
 
     const auto first = sensor.read();
     assert(first && first->celsius() == 123.5F);
@@ -318,7 +399,9 @@ void test_max31865_por_value_is_not_exposed_before_readiness()
         clock,
     };
     backend.set_result({Max31865ReadStatus::Valid, -242.02F});
-    smoker::platform::Max31865ChamberSensor sensor{backend};
+    smoker::platform::Max31865ChamberSensor sensor{
+        backend, supplier_documented_validity,
+    };
 
     assert(sensor.configured());
     assert(!sensor.read().has_value());
@@ -342,7 +425,9 @@ void test_max31865_reconfiguration_resets_readiness_without_reuse()
         clock,
     };
     backend.set_result({Max31865ReadStatus::Valid, 121.0F});
-    smoker::platform::Max31865ChamberSensor sensor{backend};
+    smoker::platform::Max31865ChamberSensor sensor{
+        backend, supplier_documented_validity,
+    };
 
     clock.advance(66ms);
     const auto first = sensor.read();
@@ -372,7 +457,9 @@ void test_max31865_reinitialization_resets_readiness()
         clock,
     };
     backend.set_result({Max31865ReadStatus::Valid, 92.0F});
-    smoker::platform::Max31865ChamberSensor sensor{backend};
+    smoker::platform::Max31865ChamberSensor sensor{
+        backend, supplier_documented_validity,
+    };
 
     clock.advance(55ms);
     assert(sensor.read().has_value());
@@ -404,7 +491,9 @@ void test_max31865_fault_recovery_requires_fresh_current_value()
         clock,
     };
     backend.set_result({Max31865ReadStatus::Fault, 0.0F});
-    smoker::platform::Max31865ChamberSensor sensor{backend};
+    smoker::platform::Max31865ChamberSensor sensor{
+        backend, supplier_documented_validity,
+    };
 
     clock.advance(55ms);
     assert(!sensor.read().has_value());
@@ -433,7 +522,9 @@ void test_max31865_read_is_observed_allocation_free()
         clock,
     };
     backend.set_result({Max31865ReadStatus::Valid, 42.0F});
-    smoker::platform::Max31865ChamberSensor sensor{backend};
+    smoker::platform::Max31865ChamberSensor sensor{
+        backend, supplier_documented_validity,
+    };
 
     allocation_probe::begin();
     const auto early = sensor.read();
@@ -459,7 +550,9 @@ void test_max31865_premature_application_tick_latches_fault_and_heater_off()
         readiness_clock,
     };
     backend.set_result({Max31865ReadStatus::Valid, 30.0F});
-    smoker::platform::Max31865ChamberSensor sensor{backend};
+    smoker::platform::Max31865ChamberSensor sensor{
+        backend, supplier_documented_validity,
+    };
 
     const std::array probes{
         smoker::core::FoodProbeConfig{
@@ -513,11 +606,166 @@ void test_max31865_premature_application_tick_latches_fault_and_heater_off()
     assert(heater.last_demand().percent() == 0.0F);
 }
 
+void test_max31865_initialization_failure_while_idle_latches_safety_fault()
+{
+    FakeMax31865Backend backend{Max31865InitializationStatus::DescriptorError};
+    smoker::platform::Max31865ChamberSensor sensor{
+        backend, supplier_documented_validity,
+    };
+    const std::array probes{
+        smoker::core::FoodProbeConfig{
+            1U, "M7 simulated food probe", smoker::core::ProbeRole::Meat,
+            std::nullopt, true, false,
+        },
+    };
+    smoker::platform::SimulatedFoodProbeSource food_source{probes};
+    smoker::platform::DeterministicChamberController chamber_controller;
+    smoker::platform::SimulatedHeaterOutput heater;
+    smoker::platform::SimulatedClock clock;
+    smoker::platform::SimulatedEventSink events;
+    smoker::app::SmokerApplication application{
+        sensor, food_source, chamber_controller, heater, clock, events,
+        smoker::core::SafetyLimits{temperature(150.0F)}, probes,
+    };
+
+    assert(application.snapshot().session_status
+        == smoker::core::SessionStatus::Idle);
+    application.tick();
+    const auto snapshot = application.snapshot();
+    assert(snapshot.session_status == smoker::core::SessionStatus::Fault);
+    assert(snapshot.active_fault
+        && snapshot.active_fault->code
+            == smoker::core::FaultCode::ChamberSensorInvalid);
+    assert(!snapshot.chamber_temperature.has_value());
+    assert(heater.last_demand() == smoker::core::HeaterDemand::off());
+    assert(backend.read_calls == 0U);
+    bool published_fault = false;
+    for (const auto& event : events.events()) {
+        published_fault = published_fault
+            || (event.type == smoker::core::EventType::FaultRaised
+                && event.fault_code
+                && *event.fault_code
+                    == smoker::core::FaultCode::ChamberSensorInvalid);
+    }
+    assert(published_fault);
+}
+
+void test_max31865_later_driver_failure_latches_without_cached_temperature()
+{
+    const std::array results{
+        Max31865ReadResult{Max31865ReadStatus::Valid, 30.0F},
+        Max31865ReadResult{Max31865ReadStatus::DriverError, 0.0F},
+        Max31865ReadResult{Max31865ReadStatus::Valid, 31.0F},
+    };
+    FakeMax31865Backend backend{
+        Max31865InitializationStatus::ConfiguredAwaitingFirstSample, results,
+    };
+    smoker::platform::Max31865ChamberSensor sensor{
+        backend, supplier_documented_validity,
+    };
+    const std::array probes{
+        smoker::core::FoodProbeConfig{
+            1U, "M7 simulated food probe", smoker::core::ProbeRole::Meat,
+            std::nullopt, true, false,
+        },
+    };
+    smoker::platform::SimulatedFoodProbeSource food_source{probes};
+    smoker::platform::DeterministicChamberController chamber_controller;
+    smoker::platform::SimulatedHeaterOutput heater;
+    smoker::platform::SimulatedClock clock;
+    smoker::platform::SimulatedEventSink events;
+    smoker::app::SmokerApplication application{
+        sensor, food_source, chamber_controller, heater, clock, events,
+        smoker::core::SafetyLimits{temperature(150.0F)}, probes,
+    };
+    const smoker::core::Recipe recipe{
+        9U, "M7 later-failure recipe",
+        smoker::core::Stage{9U, "M7 stage", temperature(110.0F), std::nullopt},
+    };
+    assert(application.submit(smoker::app::StartSessionCommand{9U, recipe}));
+
+    application.tick();
+    auto snapshot = application.snapshot();
+    assert(snapshot.session_status == smoker::core::SessionStatus::Running);
+    assert(snapshot.chamber_temperature
+        && snapshot.chamber_temperature->celsius() == 30.0F);
+    assert(heater.last_demand().percent() == 100.0F);
+
+    application.tick();
+    snapshot = application.snapshot();
+    assert(snapshot.session_status == smoker::core::SessionStatus::Fault);
+    assert(snapshot.active_fault
+        && snapshot.active_fault->code
+            == smoker::core::FaultCode::ChamberSensorInvalid);
+    assert(!snapshot.chamber_temperature.has_value());
+    assert(heater.last_demand() == smoker::core::HeaterDemand::off());
+
+    application.tick();
+    snapshot = application.snapshot();
+    assert(snapshot.chamber_temperature
+        && snapshot.chamber_temperature->celsius() == 31.0F);
+    assert(snapshot.session_status == smoker::core::SessionStatus::Fault);
+    assert(snapshot.active_fault.has_value());
+    assert(heater.last_demand() == smoker::core::HeaterDemand::off());
+}
+
+void test_max31865_valid_then_out_of_range_latches_without_cached_temperature()
+{
+    const std::array results{
+        Max31865ReadResult{Max31865ReadStatus::Valid, 31.3F},
+        Max31865ReadResult{Max31865ReadStatus::Valid, -242.02F},
+    };
+    FakeMax31865Backend backend{
+        Max31865InitializationStatus::ConfiguredAwaitingFirstSample, results,
+    };
+    smoker::platform::Max31865ChamberSensor sensor{
+        backend, supplier_documented_validity,
+    };
+    const std::array probes{
+        smoker::core::FoodProbeConfig{
+            1U, "M7 simulated food probe", smoker::core::ProbeRole::Meat,
+            std::nullopt, true, false,
+        },
+    };
+    smoker::platform::SimulatedFoodProbeSource food_source{probes};
+    smoker::platform::DeterministicChamberController chamber_controller;
+    smoker::platform::SimulatedHeaterOutput heater;
+    smoker::platform::SimulatedClock clock;
+    smoker::platform::SimulatedEventSink events;
+    smoker::app::SmokerApplication application{
+        sensor, food_source, chamber_controller, heater, clock, events,
+        smoker::core::SafetyLimits{temperature(150.0F)}, probes,
+    };
+    const smoker::core::Recipe recipe{
+        10U, "M7 range-failure recipe",
+        smoker::core::Stage{10U, "M7 stage", temperature(110.0F), std::nullopt},
+    };
+    assert(application.submit(smoker::app::StartSessionCommand{10U, recipe}));
+
+    application.tick();
+    auto snapshot = application.snapshot();
+    assert(snapshot.chamber_temperature
+        && snapshot.chamber_temperature->celsius() == 31.3F);
+    assert(snapshot.session_status == smoker::core::SessionStatus::Running);
+    assert(heater.last_demand().percent() == 100.0F);
+
+    application.tick();
+    snapshot = application.snapshot();
+    assert(!snapshot.chamber_temperature.has_value());
+    assert(snapshot.session_status == smoker::core::SessionStatus::Fault);
+    assert(snapshot.active_fault
+        && snapshot.active_fault->code
+            == smoker::core::FaultCode::ChamberSensorInvalid);
+    assert(heater.last_demand() == smoker::core::HeaterDemand::off());
+}
+
 } // namespace
 
 int main()
 {
     test_max31865_configuration_policy_requires_explicit_valid_values();
+    test_max31865_temperature_validity_policy_is_finite_ordered_and_inclusive();
+    test_max31865_temperature_validity_accepts_boundaries_and_rejects_outside();
     test_max31865_60_hz_first_conversion_boundary();
     test_max31865_50_hz_first_conversion_boundary();
     test_max31865_initialization_and_configuration_failures_are_absent();
@@ -528,5 +776,8 @@ int main()
     test_max31865_fault_recovery_requires_fresh_current_value();
     test_max31865_read_is_observed_allocation_free();
     test_max31865_premature_application_tick_latches_fault_and_heater_off();
+    test_max31865_initialization_failure_while_idle_latches_safety_fault();
+    test_max31865_later_driver_failure_latches_without_cached_temperature();
+    test_max31865_valid_then_out_of_range_latches_without_cached_temperature();
     return 0;
 }

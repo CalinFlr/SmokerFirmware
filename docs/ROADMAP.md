@@ -16,14 +16,19 @@ A future item is **not permission to implement it early**.
 - **M6B — external-hardware identification:** started for chamber and probe
   acquisition. MAX31865 plus a three-wire PT100 and two ADS1115 converters are
   selected, with exact registry drivers imported. The final soldered MAX31865
-  assignment is SPI2/GPIO12 SCK/GPIO11 MOSI/GPIO13 MISO/GPIO10 CS. Physical
-  modules/revisions, remaining PT100 and probe-frontend facts, address straps,
-  connectors, probe GPIOs, and connected validation remain open. SSR, power,
+  assignment is SPI2/GPIO12 SCK/GPIO11 MOSI/GPIO13 MISO/GPIO10 CS, and the
+  supplier-documented probe assembly and maintainer-reported three-wire
+  placement are recorded. The first connected diagnostic failed because MISO
+  followed its pulls; a later corrected run passed pull-independent SPI,
+  exact configuration/shutdown readbacks, and ten stable raw samples. The
+  module/revision, fitted Rref, continuity, shield, remaining probe-frontend
+  facts, address straps, connectors, and probe GPIOs remain open. SSR, power,
   and independent-protection hardware are still blocked on exact parts.
 - **M6B and M7-M10 — remaining controller product baseline:** incomplete. M7,
-  M8, and M9 now have inactive host-tested/cross-buildable MAX31865, PID, and
-  dual-ADS1115 software boundaries, but production remains deterministic and
-  simulated and physical activation stays gated by M6B. Product V0 cannot be
+  M8, and M9 now have host-tested/cross-buildable MAX31865, PID, and
+  dual-ADS1115 software boundaries. MAX31865 is active as the ordinary chamber
+  source; food probes and heater remain simulated, deterministic PID remains
+  inactive, and remaining physical validation stays gated by M6B. Product V0 cannot be
   called complete before real sensing/output, food probes, persistence, and
   recovery are implemented and validated at their appropriate levels.
 - **M11 — local display:** postponed because no display has been purchased.
@@ -192,14 +197,16 @@ Definition of done:
 
 ## M6B — Identify external sensing, output, and safety hardware
 
-Status: **In progress — MAX31865/three-wire PT100 and two ADS1115 converters
-selected; physical modules, complete electrical frontends, and the remaining
-external hardware are still incomplete.**
+Status: **In progress — MAX31865/three-wire PT100 functional communication,
+raw sampling, and checked shutdown passed after the preserved first
+floating-MISO failure; two ADS1115 converters are selected; physical module
+identity, complete electrical frontends, and remaining external hardware are
+still incomplete.**
 
-Inactive adapter software may be implemented when unknown physical values stay
-mandatory configuration and production composition remains simulated. Do not
-activate a real external adapter, initialize its concrete bus, or assign pins
-until the actual component/interface is available and documented.
+External-adapter activation requires documented facts, explicit evidence-class
+boundaries, and a recorded decision. MAX31865 functional evidence permits its
+ordinary activation with provisional choices labeled; it does not complete
+the remaining M6B electrical, calibration, heater, or independent-safety work.
 
 Confirm and document:
 
@@ -218,19 +225,20 @@ checklist is resolved.
 
 ## M7 — Real authoritative chamber sensor
 
-Status: **Software adapter and opt-in board diagnostic implemented but inactive
-— host behavior and ESP-IDF 6.0.2 build/API compatibility are validated;
-runtime activation and all connected-sensor evidence remain blocked on the
-remaining M6B chamber facts.**
+Status: **Ordinary MAX31865 chamber activation implemented and build-validated;
+connected SPI/configuration/raw/shutdown functional bring-up is T-pass after a
+preserved first floating-MISO failure. Calibration, sustained ordinary runtime,
+controlled faults, response/noise, fitted Rref, and remaining M6B physical
+facts are pending.**
 
-Eventually replace the simulated chamber source with the real hardware adapter.
-
-Keep simulated adapter for development/testing.
+The ordinary composition uses MAX31865 as its only authoritative chamber
+source. Simulated chamber infrastructure remains available only to host tests;
+food probes and heater output remain simulated in production.
 
 Use the exact-pinned ESP Component Registry dependency
 `esp-idf-lib/max31865` 1.0.8 rather than rewriting the register protocol. Its
 70 ms `max31865_measure()` convenience call is forbidden inside the critical
-cycle. The inactive backend provisionally configures continuous conversion and
+cycle. The active backend configures continuous conversion and
 distinguishes descriptor/configuration success from sample readiness. Its
 host-tested monotonic policy returns absence and performs no fault/temperature
 register read before the official maximum first-conversion interval: 55 ms for
@@ -240,26 +248,41 @@ after fault clear, resets this boundary.
 Project-owned read code contains no explicit delay, task creation, heap
 allocation, or `max31865_measure()` call. This source/host evidence does not
 prove ESP-IDF/driver/SPI allocation behavior or bound real SPI worst-case
-blocking. Bus ownership/timing and any additional module/input-network or bias
-settling remain connected-hardware gates.
+blocking. Module/input-network settling and sustained target timing remain
+connected-hardware gates.
 
 The confirmed RTD configuration is PT100 with three leads, corresponding to
 driver nominal resistance `100.0F` and `MAX31865_3WIRE`. The fitted module
-reference resistor remains an independent required value and must not be
-inferred from the RTD type.
+reference resistor remains an independent required physical fact. Production
+uses provisional Rref 430.0 ohm, 50 Hz, ITS-90, and 100 kHz; these operational
+choices must not be confused with a measured fitted resistor, its tolerance,
+or calibrated accuracy.
 
 The project adapter maps every SPI, conversion, non-finite, and MAX31865 fault
 to an absent authoritative measurement; existing safety then latches
 `ChamberSensorInvalid` and commands heater OFF. No last-known-value fallback is
 allowed.
 
-The adapter requires explicit SPI host, CS GPIO, SPI clock, fitted reference
-resistance, filter, and RTD standard. Production still composes
-`SimulatedChamberSensor`; no bus or GPIO value is present in the production
-composition. The final target assignment is nevertheless recorded once in
-platform production code as SPI2/GPIO12 SCK/GPIO11 MOSI/GPIO13 MISO/GPIO10 CS,
-matching the maintainer-reported soldered board. This is configuration intent,
-not connected behavior.
+The sensor-specific validity policy requires finite, strictly ordered explicit
+bounds and accepts the inclusive supplier-documented assembled-probe range
+-50.0..+200.0 C. This is documentation-backed operational policy, not measured
+calibration. Raw-zero-like -242.02 C and every finite value outside the range
+are absent without changing the global finite `Temperature` domain.
+
+Production centralizes SPI2/GPIO12 SCK/GPIO11 MOSI/GPIO13 MISO/GPIO10 CS,
+100 kHz, PT100/three-wire, 50 Hz, ITS-90, Rref 430.0 ohm, active `0xD1`,
+terminal `0x11`, and a 66 ms first-conversion boundary. Runtime owns the bus
+before the descriptor, applies a checked GPIO13 internal MISO pull-up after bus
+initialization and before descriptor access, destroys the descriptor before the
+bus, and restores MISO to floating after successful bus release. It uses the
+real monotonic clock and completes bus/descriptor/configuration plus the first
+sample wait before creating the sole `ControlTask` when sensor startup succeeds.
+Bus/pull, descriptor/configuration, or boundary failure instead creates the
+ordinary runtime with a permanently unavailable chamber source: its first IDLE
+tick publishes `ChamberSensorInvalid`, FAULT, no chamber value, and heater OFF.
+Normal services still start, and a pending OTA image rolls back through the
+published fault; only critical runtime allocation or task creation retains the
+immediate bootstrap rollback path.
 
 The software-only board diagnostic remains default-OFF and compiles as an
 exclusive target composition that cannot construct the normal application,
@@ -273,13 +296,21 @@ write/readback success, while bounded RAII fallbacks attempt the same cleanup
 on early returns. Software-SPI first restores idle clock and a CS-high frame
 boundary; descriptor removal still precedes bus release. Sensor
 fault samples remain distinct from SPI/shutdown failure. Separate ordinary and
-overlay builds validate the intended ordering and isolation only; the
-diagnostic has not been flashed or monitored, so physical shutdown is not
-proved.
+overlay builds validate the intended ordering and isolation. On 2026-08-24 the
+first run failed at pull-following MISO and remains recorded. A later corrected
+setup observed pull-independent `0x11`, exact software `0x00`/`0x91`/`0xD1`,
+exact software terminal `0x11`, driver initial `0x11` and active `0xD1`, ten
+raw 8548/8549 samples with zero fault/transaction/sensor-fault counts, and
+driver terminal `0x11`. A separate raw-zero/`0x40` observation is not treated
+as controlled open/short evidence.
 
-M7 remains incomplete until the chamber portion of M6B is recorded and the
-physical sensor, wiring, conversion timing, accuracy, noise, open/short faults,
-recovery, and sustained operation are validated on the target.
+M7 completion is split by evidence class: SPI/configuration/raw/shutdown
+functional bring-up is T-pass; adapter behavior and ordinary activation are
+H-pass/B-pass/Guardrail; calibrated accuracy, response/noise, controlled
+open/short faults and recovery, sustained ordinary runtime, module identity,
+fitted Rref/tolerance, continuity, and independent physical quiescence remain
+HW/T-pending. M7 and the overall chamber portion of M6B therefore remain
+incomplete even though the ordinary authoritative sensor is active.
 
 Requires the chamber-sensor/frontend portion of M6B.
 
@@ -287,8 +318,8 @@ Requires the chamber-sensor/frontend portion of M6B.
 
 Status: **First software-integration slice implemented but inactive — the
 application boundary and exact-pinned float PID adapter are host-tested and
-ESP-IDF 6.0.2 cross-buildable; production remains deterministic/simulated and
-all cadence, tuning, SSR, thermal-plant, and hardware-safety evidence remains
+ESP-IDF 6.0.2 cross-buildable; production retains deterministic control and a
+simulated heater, and all cadence, tuning, SSR, thermal-plant, and hardware-safety evidence remains
 pending.**
 
 Implement real platform heater driver.
@@ -302,7 +333,7 @@ The PID component and ESP-IDF types remain target-only in `smoker_platform`.
 `SmokerApplication` now obtains requested demand through injected
 `IChamberController`. Ordinary production composition explicitly uses
 `DeterministicChamberController`, preserving the M2 100/0 behavior with
-`SimulatedChamberSensor`, `SimulatedFoodProbeSource`, and
+`Max31865ChamberSensor`, `SimulatedFoodProbeSource`, and
 `SimulatedHeaterOutput`. The real float PID adapter is compiled but not composed.
 No SSR output, GPIO, or switching window exists.
 
@@ -507,8 +538,9 @@ persistence, mDNS, authentication, explicit Start/Stop including saturated Stop
 admission, automatic iPhone captive opening, real scan/refresh/hidden-SSID
 fallback, wrong-password retry, Wi-Fi loss during RUNNING, a stable ten-minute
 run, ControlTask/DNS core affinity and stack watermark, and TWDT behavior. These
-checks validate the board, radio, and simulated I/O only—not sensors, SSR,
-electrical protection, or thermal safety.
+checks were completed before M7 activation and validate the board, radio, and
+then-simulated I/O only—not the now-active chamber sensor, SSR, electrical
+protection, or thermal safety.
 
 The 2026-08-17 target flash/boot check verified image SHA, ESP-IDF 6.0.2,
 `ControlTask` on core 1 in `IDLE` with simulated heater `0%`, Wi-Fi on core 0,

@@ -18,12 +18,14 @@ if(ESP_PLATFORM)
     list(APPEND smoker_platform_sources
         "src/ads1115_target_backend.cpp"
         "src/blynk_service.cpp"
+        "src/esp_monotonic_clock.cpp"
         "src/firmware_update_service.cpp"
         "src/history_service.cpp"
         "src/local_connectivity.cpp"
         "src/max31865_target_backend.cpp"
+        "src/max31865_spi_bus.cpp"
         "src/pid_target_backend.cpp"
-        "src/simulation_runtime.cpp"
+        "src/ordinary_runtime.cpp"
     )
     if(CONFIG_SMOKER_MAX31865_CONNECTED_DIAGNOSTIC)
         list(APPEND smoker_platform_sources

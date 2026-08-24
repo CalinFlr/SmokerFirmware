@@ -74,12 +74,12 @@ Do not create ports before a milestone needs them.
 
 ESP-IDF/hardware-specific implementations.
 
-Current M15 plus inactive M7/M8/M9 software implementations:
+Current M15, active M7, and inactive M8/M9 software implementations:
 
-- simulated chamber/probe sources;
+- real MAX31865 chamber source plus simulated food-probe sources;
 - simulated heater output;
-- ESP-IDF simulation runtime owning the single FreeRTOS `ControlTask`, task
-  watchdog subscription, and bounded simulation event sink.
+- ESP-IDF ordinary mixed-I/O runtime owning the single FreeRTOS `ControlTask`,
+  task watchdog subscription, and bounded event sink.
 - dedicated-NVS Wi-Fi configuration, STA/SoftAP fallback, mDNS, an ESP-IDF HTTP
   server, asynchronous 2.4 GHz scanning, captive-portal DNS/DHCP discovery, and
   the embedded Fumuri local UI;
@@ -95,9 +95,9 @@ Current M15 plus inactive M7/M8/M9 software implementations:
 - a platform-only Blynk Device MQTT/TLS adapter, two bounded command mailboxes,
   shared atomic external IDs, UART0/NVS credential provisioning, and one static
   low-priority core-0 `BlynkTask`. Remote loss cannot enter control or safety.
-- an inactive MAX31865 chamber-sensor adapter behind `IChamberSensor`, with a
-  host-testable result/configuration policy and a target-only RAII backend over
-  the pinned 1.0.8 API. Production composition remains simulated.
+- an active MAX31865 chamber-sensor adapter behind `IChamberSensor`, with a
+  host-testable result/configuration policy, target-only SPI-bus ownership,
+  exact configuration access, and a RAII backend over pinned driver 1.0.8.
 - an inactive dual-ADS1115 food-probe adapter behind `IFoodProbeSource`, with
   one host-testable staged acquisition owner, timestamped per-probe caches,
   mandatory injected calibration/validity, and a target-only RAII backend over
@@ -111,7 +111,7 @@ Future examples:
 
 - SSR heater output;
 - NVS session/config store;
-- ESP clock/reset-reason adapter;
+- reset-reason adapter;
 
 ## Dependency direction
 
@@ -142,47 +142,72 @@ Its job is to:
 
 Business rules do not belong in `app_main.cpp`.
 
-At M15, `app_main` composes the built-in simulation configuration and delegates
-task/runtime mechanics to `smoker_platform`.
+At M15 plus M7 activation, `app_main` composes the built-in ordinary mixed-I/O
+configuration and delegates task/runtime mechanics to `smoker_platform`.
 
-### Inactive M7 MAX31865 boundary
+### Active M7 MAX31865 boundary
 
-The M7 software boundary does not change production composition. A
-platform-neutral `IMax31865Backend` seam and monotonic readiness policy let
-host tests prove that configured-but-not-ready, read/fault, and non-finite
-outcomes become an absent chamber reading, with no last-value reuse. The
-target-only backend requires explicit SPI host, CS GPIO, SPI clock, monotonic
-clock, fitted reference resistance, filter, and RTD standard; it supplies no
-fabricated defaults. PT100 nominal 100 ohm and three-wire are the only fixed
-physical choices currently supported by the adapter.
+The ordinary runtime's sole authoritative chamber source is now
+`Max31865ChamberSensor`. Its target-only composition owns the SPI2 bus, an
+`EspMonotonicClock`, the pinned-driver descriptor/backend, and the chamber
+adapter in that construction order; destruction performs checked exact
+converter shutdown and descriptor removal before freeing the bus. Food probes
+and heater output remain simulated, control remains the deterministic M2 100/0
+adapter, and the real PID adapter remains inactive. No SSR or heater GPIO path
+is composed.
 
-The final soldered controller assignment is a separate target-platform fact
-shared by bring-up and future production composition: SPI2, GPIO12 SCK, GPIO11
-MOSI, GPIO13 MISO, and GPIO10 CS. The maintainer reported that assignment on
-2026-08-22. Recording it in `max31865_board_pins.hpp` does not initialize the
-bus or establish module power, continuity, response, fitted Rref, or validity.
-The backend still receives its complete configuration explicitly when a future
-composition is authorized.
+The active implementation is `ordinary_runtime.hpp`/`ordinary_runtime.cpp`.
+The centralized ordinary configuration is SPI2, GPIO12 SCK, GPIO11 MOSI,
+GPIO13 MISO, GPIO10 CS, mode 1 through driver 1.0.8, 100 kHz, PT100 nominal
+100 ohm, three-wire, 50 Hz, ITS-90, active `0xD1`, terminal `0x11`, and
+provisional Rref 430.0 ohm. It also explicitly owns a checked GPIO13 internal
+pull-up and applies the supplier-documented inclusive -50..+200 C assembled
+probe range as sensor-specific operational validity. The pin assignment,
+PT100/three-wire facts, and range are
+maintainer/probe documentation. SPI response, exact active/terminal readback,
+and stable raw codes are connected T-pass evidence. The Rref and ITS-90 values
+are operational choices corroborated by conversion math; 430.0 ohm is not a
+measurement of the fitted reference resistor or its tolerance.
 
-Initialization acquires the real 1.0.8 descriptor and configures bias plus
-`MAX31865_MODE_AUTO`, but reports `ConfiguredAwaitingFirstSample`, not sample
-readiness. The MAX31865 RTD registers reset to zero, which driver 1.0.8 can
-convert successfully to about -242.02 C. The backend therefore arms a
-monotonic boundary after every successful continuous configuration and returns
-explicit `NotReady` before the official maximum first-conversion interval:
-55 ms for the 60 Hz notch or 66 ms for the 50 Hz notch. At and after that
-boundary it may call `max31865_get_fault_status()` and
-`max31865_read_temperature()`. Fault clear/reconfiguration resets the boundary;
-the faulting and intervening readings remain absent.
+Startup initializes the bus, establishes the checked MISO pull-up, then permits
+descriptor creation and writes and reads back
+the complete exact `0xD1` byte, then waits at least the documented 66 ms first
+50 Hz conversion boundary using the real monotonic clock. Only after that
+boundary does ownership transfer to the sole `ControlTask`. The task calls
+`SmokerApplication::tick()` at its existing cadence; safety evaluation remains
+synchronous before the only, still-simulated heater write.
 
-Project-owned `read()`/`read_continuous()` code contains no explicit delay,
-task creation, heap allocation, or `max31865_measure()` call. Host allocation
-observation and source inspection do not prove that ESP-IDF/driver/SPI internals
-are allocation-free or that real SPI transactions have a bounded worst-case
-latency. Continuous conversion is provisional. SPI-bus ownership and timing,
-module/input-network and bias settling, wiring, accuracy, noise, fault recovery,
-and sustained physical behavior remain gated on M6B facts and connected M7
-tests.
+SPI-bus/pull setup, descriptor/configuration, or first-boundary failure leaves
+the chamber adapter permanently unavailable until reboot but does not suppress
+the ordinary runtime. `ControlTask` and observation/connectivity services still
+start; the first tick publishes no chamber value, latches
+`ChamberSensorInvalid`, reports `FAULT`, and retains exact OFF demand. Critical
+runtime-context allocation or `ControlTask` creation failure remains an
+immediate pending-image rollback path. A sensor-faulting pending image instead
+reaches the normal validator, which cannot count a safe cycle and rolls back on
+the published fault without weakening the five-cycle contract.
+
+The backend deliberately avoids driver 1.0.8's configuration and fault-clear
+read-modify-write helpers. Initialization and recovery use exact raw register
+writes, exact active readback, and freshness invalidation. A faulting, failed,
+non-finite, or out-of-range current sample is absent; the application latches
+`ChamberSensorInvalid` and
+the heater command is OFF. Recovery can only arm a fresh future conversion and
+cannot reuse a cached temperature or automatically resume a latched session.
+Shutdown writes and verifies exact terminal `0x11`, then removes the descriptor;
+early failure and startup-failure paths preserve the same descriptor-before-bus
+release ordering. After successful bus release, the owned GPIO13 pull is
+restored to floating. A disconnected/high-impedance MISO therefore resolves
+toward `0xff`, while stuck-low/raw-zero paths are rejected by exact configuration
+verification and the temperature-validity policy.
+
+Project-owned steady-state read code contains no explicit delay, task creation,
+heap allocation, or `max31865_measure()` call. Host/source/build evidence does
+not prove allocation or worst-case latency inside ESP-IDF/driver/SPI internals.
+Connected diagnostic success also does not establish calibrated accuracy,
+noise, response time, sustained ordinary-runtime behavior, controlled
+open/short fault handling, module identity, fitted Rref, or physical quiescence
+beyond the observed readbacks.
 
 An additional target-only connected-board diagnostic is compiled only when
 `CONFIG_SMOKER_MAX31865_CONNECTED_DIAGNOSTIC` is explicitly enabled; Kconfig
@@ -209,9 +234,13 @@ mode-1 idle and a CS-high frame boundary so a shutdown write cannot append to
 a partially failed transfer. Descriptor removal is attempted even after a
 shutdown failure and occurs before `spi_bus_free()`. A normal-path
 shutdown write/readback failure makes the diagnostic fail. Source/build
-evidence proves this intended cleanup sequence only; without executing the
-connected diagnostic it does not prove that a physical converter became
-quiescent.
+evidence proves this intended cleanup sequence only. The first connected run
+on 2026-08-24 failed when software-SPI MISO followed its pulls. A later
+corrected connected setup produced pull-independent `0x11`, exact software
+patterns `0x00`/`0x91`/`0xD1`, ten stable raw samples with no transaction or
+sensor fault, and exact software and driver terminal `0x11` readbacks. The
+earlier failure remains part of the chronology; neither run is calibration or
+controlled fault-injection evidence.
 
 ### Inactive M8 PID boundary
 
@@ -225,9 +254,10 @@ every `SmokerApplication` construction site.
 Production constructs `DeterministicChamberController`, a thin adapter around
 the existing core 100% below target / 0% at-or-above-target calculation. The
 real `PidChamberController` is compiled and host-tested but is not constructed
-by `main` or `SimulationContext`. `SimulatedChamberSensor`,
-`SimulatedFoodProbeSource`, and `SimulatedHeaterOutput` remain the production
-composition; there is no SSR output, GPIO assignment, or switching window.
+by the ordinary runtime. `Max31865ChamberSensor`,
+`SimulatedFoodProbeSource`, and `SimulatedHeaterOutput` form the production
+composition; there is no SSR output, heater GPIO assignment, or switching
+window.
 
 The official registry dependency is `espressif/pid_ctrl` exactly 0.3.1 at
 component hash
@@ -1022,9 +1052,9 @@ M15 checks additionally cover the exact MQTT pin, platform confinement,
 callback isolation, two bounded mailboxes, fair ControlTask draining, static
 core/priority placement, TLS/session/topic settings, provisioning boundaries,
 status/result separation, and bounded payloads.
-The inactive M7/M8/M9 checks additionally keep hardware/component types
-target-only, preserve simulated production composition, enforce exact registry
-pins and explicit configuration/call ordering, and reject project-owned
+The active M7 and inactive M8/M9 checks additionally keep hardware/component
+types target-only, preserve the documented mixed production composition,
+enforce exact registry pins and explicit configuration/call ordering, and reject project-owned
 waits/tasks/steady-state allocation in their adapter paths. The M8 check can
 optionally validate the reviewed upstream source when managed components are
 present, but never fetches and passes a tracked-files-only checkout when they

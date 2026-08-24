@@ -29,6 +29,17 @@ struct Max31865ConversionConfiguration final {
     Max31865RtdStandard standard;
 };
 
+// Sensor-specific operational validity. Bounds are mandatory, inclusive, and
+// deliberately separate from the global Temperature domain.
+struct Max31865TemperatureValidityPolicy final {
+    float minimum_celsius;
+    float maximum_celsius;
+};
+
+[[nodiscard]] bool valid_max31865_temperature_validity_policy(
+    const Max31865TemperatureValidityPolicy& policy
+) noexcept;
+
 [[nodiscard]] bool valid_max31865_conversion_configuration(
     const Max31865ConversionConfiguration& configuration
 ) noexcept;
@@ -93,13 +104,17 @@ public:
 
 class Max31865ChamberSensor final : public app::IChamberSensor {
 public:
-    explicit Max31865ChamberSensor(IMax31865Backend& backend) noexcept;
+    Max31865ChamberSensor(
+        IMax31865Backend& backend,
+        Max31865TemperatureValidityPolicy validity_policy
+    ) noexcept;
 
     [[nodiscard]] std::optional<core::Temperature> read() noexcept override;
     [[nodiscard]] bool configured() const noexcept;
 
 private:
     IMax31865Backend& backend_;
+    Max31865TemperatureValidityPolicy validity_policy_;
     bool configured_{false};
 };
 

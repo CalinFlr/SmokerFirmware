@@ -38,7 +38,8 @@ component inventory; every future sensor, probe frontend, output, power, and
 independent-safety component must be recorded there before integration.
 The firmware now provides:
 
-- a deterministic simulated chamber-to-heater control cycle;
+- a real MAX31865/three-wire PT100 authoritative chamber input feeding the
+  deterministic controller and simulated heater output;
 - Start/Stop with a recipe snapshot and exactly one stage;
 - optional monotonic timers with immediate, chamber-threshold, or selected
   food-probe threshold start conditions;
@@ -78,9 +79,10 @@ main -> smoker_app -> smoker_core
 main -> smoker_platform -> smoker_app
 ```
 
-`main/app_main.cpp` is the thin composition root for a simulated-I/O runtime
-with local connectivity.
-FreeRTOS task/watchdog mechanics and the owned simulation context live in
+`main/app_main.cpp` is the thin composition root for the ordinary mixed-I/O
+runtime with local connectivity: MAX31865 chamber sensing, simulated food
+probes, and simulated heater output.
+FreeRTOS task/watchdog mechanics and the owned runtime context live in
 `smoker_platform`. The context is allocated once before the critical task starts
 and ownership is transferred to that task, keeping the large application state
 off both the ESP-IDF main-task stack and the control-task stack.
@@ -90,6 +92,9 @@ probe events/alarms using those commands, updates timer state, evaluates safety
 synchronously, applies the safety gate, writes the simulated heater, and then
 publishes events. The simulated event history is bounded to the newest 64
 entries and reports how many older entries were overwritten.
+The MAX31865 and application share the ESP monotonic clock; startup initializes
+the SPI bus and exact active configuration, waits past the 66 ms 50 Hz
+first-conversion boundary, and only then creates the sole `ControlTask`.
 
 ## Local ESP-IDF setup
 
@@ -603,14 +608,15 @@ and a 75% image-usage ceiling per app slot. An M13 device needs one complete
 signed serial flash to adopt the M14 table because an application OTA cannot
 migrate its own partition table; the helper does not erase or write NVS.
 
-## M0-M5 outcome and next gate
+## Current ordinary mixed-I/O outcome and next gate
 
-The V0 simulated application/control slice includes:
+The current ordinary firmware builds on the completed M0-M5 simulated
+application/control slice and includes:
 
 - ESP32-S3 project builds;
 - one active session;
 - one recipe stage;
-- simulated authoritative chamber temperature;
+- MAX31865/three-wire PT100 authoritative chamber temperature;
 - simulated heater;
 - chamber target control;
 - optional timer;
@@ -623,11 +629,15 @@ The V0 simulated application/control slice includes:
 Wi-Fi provisioning, local HTTP/UI, M13 OTA, M14 simulated-I/O session history,
 and optional M15 Blynk client software are present. M14 history is not M10
 session/power recovery, and Blynk is not authoritative cloud control. No
-display, real SSR, active real temperature adapter, fan, or smoke generator has
-been added. The exact-pinned `esp-idf-lib/max31865` 1.0.8 registry
-driver is now present as M7 preparation, but production still uses the
-simulated chamber source until the physical module, RTD, wiring, reference
-resistor, and GPIO facts close the chamber part of M6B. No physical heater or hardware-safety
+display, real SSR, fan, or smoke generator has been added. The exact-pinned
+`esp-idf-lib/max31865` 1.0.8 registry driver is now the ordinary authoritative
+chamber path. Its current operational configuration is SPI2 GPIO12/11/13/10,
+100 kHz, PT100 three-wire, 50 Hz, ITS-90, provisional 430 ohm Rref, the
+supplier-documented inclusive -50..+200 C operational validity range, and a
+checked GPIO13 MISO pull-up. A
+connected diagnostic established pull-independent SPI communication, exact
+configuration/shutdown readbacks, and stable raw observations; this is not
+calibration, accuracy, sustained-runtime, or fault-injection evidence. No physical heater or hardware-safety
 behavior has been tested by the simulation/build/unit tests. The exact-pinned
 `esp-idf-lib/ads111x` 1.1.14 registry driver and its locked ESP-IDF 6 I2C
 support are also present as M9 preparation for the two selected ADS1115s.
@@ -649,9 +659,10 @@ Phone push receipt, exact broker timing/silence, deliberate transport loss, and
 native mobile-dashboard validation remain open.
 
 The controller product baseline cannot be considered complete before M6B and
-M7-M10 identify and integrate the remaining real hardware and implement
+the remaining M7-M10 work identifies and validates the remaining real hardware and implements
 persistence/power recovery. M6A is complete for the final SuooTci `KFB003`
-N16R8 board. M6B has started for the chamber-driver selection and remains open
-for the physical MAX31865/RTD facts plus all other external components/design.
+N16R8 board. M6B has functional connected MAX31865 evidence but remains open
+for physical module/Rref identification, continuity and electrical facts, plus
+all other external components/design.
 Rule-by-rule evidence and deferred work are recorded in
 `docs/TRACEABILITY.md`.

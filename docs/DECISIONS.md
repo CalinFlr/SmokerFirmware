@@ -952,9 +952,9 @@ Git repository.
 Importing, wrapping, and cross-building the driver is M7 software integration,
 not a completed M6B physical record or a real-sensor implementation claim. The
 selected sensor is a three-wire PT100, fixing `rtd_nominal = 100.0F` and
-`MAX31865_3WIRE` for the inactive adapter. Production continues to compose `SimulatedChamberSensor`
-until the exact breakout revision, fitted reference resistor, supply/logic
-behavior, connector, and remaining electrical facts are documented. The
+`MAX31865_3WIRE` for the then-inactive adapter. At this decision point,
+production continued to compose `SimulatedChamberSensor` pending connected
+evidence. The
 maintainer confirmed on 2026-08-22 that the final soldered production assignment
 is SPI2 with GPIO12 SCK, GPIO11 MOSI, GPIO13 MISO, and GPIO10 CS. Target code
 records that mapping once and the opt-in diagnostic consumes it, but neither
@@ -982,7 +982,7 @@ after every successful automatic configuration: 55 ms with the 60 Hz notch or
 adapter maps to absence. Fault clear/reconfiguration invalidates freshness and
 restarts the same boundary; no previous reading is reused.
 
-Continuous conversion with bias is the provisional inactive strategy.
+Continuous conversion with bias was the provisional inactive strategy.
 Project-owned read code contains no explicit delay, task creation, heap
 allocation, or `max31865_measure()` call. Host allocation observation and source
 inspection do not prove allocation behavior inside ESP-IDF/driver/SPI code or a
@@ -1018,8 +1018,21 @@ checked/idempotent normal shutdown and a bounded destructor fallback on every
 early return; descriptor removal remains
 attempted after quiescence failure and precedes bus release. Failure of checked
 normal shutdown fails the diagnostic. These source/build properties are a
-buildable future procedure, not evidence that a connected converter actually
-accepted the shutdown or that connected testing occurred.
+buildable procedure, not evidence that a connected converter actually accepted
+the shutdown.
+
+Evidence chronology, without rewriting this historical import decision: the first separately
+authorized connected run on 2026-08-24 read configuration `0xff` with the
+software-SPI MISO pull-up and `0x00` with its pull-down. It therefore failed at
+floating-MISO discrimination before complementary configuration writes, driver
+initialization, raw/fault sampling, or either exact terminal `0x11` readback.
+The software fallback requested `0x10` but observed `0x00`, so physical
+quiescence was not verified in that run. The ordinary signed simulated firmware
+was restored and verified immediately afterward. A later corrected connected
+setup produced pull-independent `0x11` reads, exact software patterns
+`0x00`/`0x91`/`0xD1`, ten stable raw samples with no transaction or sensor
+fault, and exact software and driver terminal `0x11` readbacks. D059 records
+the subsequent ordinary-runtime activation decision.
 
 Every SPI/conversion error, MAX31865 fault, non-finite value, or value rejected
 by the documented M7 validity policy becomes an absent authoritative
@@ -1163,5 +1176,70 @@ must discard a translated Blynk command whose generation is no longer current.
 Cleanup resets the pending Start parameter, results, already-selected feedback,
 events, and the callback-ordered inbound-drop watermark; it does not reject a
 new command received for the live reconnect generation.
+
+Status: Accepted.
+
+## D059 — M7 activates MAX31865 as the ordinary authoritative chamber source
+
+The ordinary firmware composes `Max31865ChamberSensor` as its sole
+authoritative chamber input after the corrected connected diagnostic produced
+pull-independent SPI configuration reads, exact software pattern readbacks,
+exact active `0xD1`, ten stable raw observations without transaction or sensor
+faults, and exact software and pinned-driver terminal `0x11` shutdown
+readbacks. The earlier floating-MISO failure remains recorded; it is not
+silently reclassified as success.
+
+Production centralizes SPI2/GPIO12 SCK/GPIO11 MOSI/GPIO13 MISO/GPIO10 CS,
+100 kHz, PT100 nominal 100 ohm, three-wire, 50 Hz, ITS-90, provisional
+430.0-ohm Rref, active `0xD1`, terminal `0x11`, and the 66 ms first-conversion
+boundary. It explicitly applies the supplier-documented inclusive -50.0..+200.0
+C assembled-probe range as sensor-specific operational validity; both finite
+bounds are mandatory and strictly ordered. The pins, PT100/three-wire selection,
+and range come from maintainer/probe documentation; SPI/configuration/raw/
+shutdown facts are connected T-pass; Rref and ITS-90 are provisional operational
+choices. The range is not measured calibration, and conversion corroboration is
+not a fitted-Rref measurement, calibration, or accuracy claim.
+
+Target startup owns and initializes the SPI bus, then establishes a checked
+GPIO13 internal pull-up before acquiring the driver descriptor. The backend
+rejects descriptor initialization unless that owner proves it owns the
+initialized SPI2 bus. It writes and verifies the full exact active byte, waits past the
+first-conversion boundary using the same real ESP monotonic clock supplied to
+`SmokerApplication`, and creates the sole `ControlTask` only afterward. Exact
+register writes replace driver 1.0.8's configuration/fault-clear
+read-modify-write helpers. Fault recovery invalidates freshness, issues an
+exact clear command, verifies a fresh active configuration, and never returns
+the faulting or cached sample. Shutdown verifies exact terminal `0x11`, removes
+the descriptor, then releases the SPI bus and restores GPIO13 to floating.
+Disconnected/high-impedance MISO consequently resolves toward `0xff`, producing
+configuration mismatch or nonzero fault data. Exact configuration readback and
+the validity policy reject stuck-low/raw-zero paths, including the driver's
+finite approximately -242.02 C raw-zero conversion.
+
+Food probes remain simulated, heater output remains simulated, the
+deterministic chamber controller remains active, and the real PID adapter stays
+uncomposed. Safety still evaluates synchronously before the sole simulated
+heater write. Driver error, converter fault, non-finite temperature, or policy
+rejection produces an absent authoritative measurement, latches
+`ChamberSensorInvalid`, and commands OFF; no later sample
+automatically resumes a latched session. No SSR/GPIO heater path or additional
+control/sensor/safety task is introduced.
+
+SPI-bus/pull, descriptor/configuration, and first-boundary failures are chamber-
+hardware failures rather than critical application-construction failures. They
+leave the sensor unavailable until reboot while ordinary `ControlTask` and the
+normal observation/connectivity services start. The first IDLE tick publishes
+no chamber value, latches `ChamberSensorInvalid`, exposes `FAULT`, and retains
+OFF. A pending image then rolls back through the normal published-fault policy;
+five safe cycles are still required to mark any image valid. Runtime-context
+allocation and `ControlTask` creation failures remain immediate pending-image
+rollback conditions because the application runtime cannot exist.
+
+The default-OFF connected diagnostic remains isolated and behaviorally
+unchanged. Activation is build-validated software plus functional connected
+bring-up evidence; calibrated accuracy, response, noise, controlled open/short
+fault injection, sustained ordinary-runtime operation, module identity,
+fitted Rref/tolerance, continuity measurements, and independent heater safety
+remain separate hardware gates.
 
 Status: Accepted.

@@ -55,15 +55,26 @@ bool valid_max31865_conversion_configuration(
     }
 }
 
+bool valid_max31865_temperature_validity_policy(
+    const Max31865TemperatureValidityPolicy& policy
+) noexcept
+{
+    return std::isfinite(policy.minimum_celsius)
+        && std::isfinite(policy.maximum_celsius)
+        && policy.minimum_celsius < policy.maximum_celsius;
+}
+
 Max31865ChamberSensor::Max31865ChamberSensor(
-    IMax31865Backend& backend
+    IMax31865Backend& backend,
+    const Max31865TemperatureValidityPolicy validity_policy
 ) noexcept
     : backend_{backend}
-    , configured_{
-          backend_.initialize()
-          == Max31865InitializationStatus::ConfiguredAwaitingFirstSample
-      }
+    , validity_policy_{validity_policy}
 {
+    if (valid_max31865_temperature_validity_policy(validity_policy_)) {
+        configured_ = backend_.initialize()
+            == Max31865InitializationStatus::ConfiguredAwaitingFirstSample;
+    }
 }
 
 std::optional<core::Temperature> Max31865ChamberSensor::read() noexcept
@@ -72,7 +83,9 @@ std::optional<core::Temperature> Max31865ChamberSensor::read() noexcept
 
     const auto result = backend_.read_continuous();
     if (result.status != Max31865ReadStatus::Valid
-        || !std::isfinite(result.celsius)) {
+        || !std::isfinite(result.celsius)
+        || result.celsius < validity_policy_.minimum_celsius
+        || result.celsius > validity_policy_.maximum_celsius) {
         return std::nullopt;
     }
     return core::Temperature::from_celsius(result.celsius);
