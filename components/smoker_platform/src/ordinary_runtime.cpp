@@ -1,4 +1,4 @@
-#include "smoker/platform/simulation_runtime.hpp"
+#include "smoker/platform/ordinary_runtime.hpp"
 
 #include "smoker/app/command_mailbox.hpp"
 #include "smoker/app/smoker_application.hpp"
@@ -9,6 +9,11 @@
 #include "smoker/platform/flash_operation_coordinator.hpp"
 #include "smoker/platform/history_service.hpp"
 #include "smoker/platform/history_support.hpp"
+#include "smoker/platform/esp_monotonic_clock.hpp"
+#include "smoker/platform/max31865_production_configuration.hpp"
+#include "smoker/platform/max31865_sensor.hpp"
+#include "smoker/platform/max31865_spi_bus.hpp"
+#include "smoker/platform/max31865_target_backend.hpp"
 #include "smoker/platform/simulated_adapters.hpp"
 #include "smoker/platform/runtime_transport_support.hpp"
 
@@ -45,12 +50,25 @@ StaticTask_t control_task_buffer;
 std::array<StackType_t, control_task_stack_size_bytes / sizeof(StackType_t)>
     control_task_stack;
 
-class SimulationContext final {
+class RuntimeContext final {
 public:
-    explicit SimulationContext(SimulationRuntimeConfiguration configuration)
-        : ambient{configuration.ambient_temperature}
+    RuntimeContext(
+        OrdinaryRuntimeConfiguration configuration,
+        std::unique_ptr<Max31865SpiBusOwner> sensor_bus_owner
+    )
+        : sensor_bus{std::move(sensor_bus_owner)}
+        , clock{}
+        , chamber_backend{
+              max31865_production_configuration.sensor,
+              clock,
+              sensor_bus.get(),
+          }
+        , chamber{
+              chamber_backend,
+              max31865_production_configuration.sensor.temperature_validity,
+          }
+        , simulated_food_temperature{configuration.simulated_food_temperature}
         , probes{std::move(configuration.food_probe)}
-        , chamber{ambient}
         , food_source{probes}
         , chamber_controller{}
         , application{
@@ -86,16 +104,37 @@ public:
               std::move(configuration.startup_recipe),
           }
     {
-        static_cast<void>(food_source.set_reading(probes.front().id, ambient));
+        static_cast<void>(food_source.set_reading(
+            probes.front().id, simulated_food_temperature
+        ));
     }
 
-    core::Temperature ambient;
+    ~RuntimeContext()
+    {
+        if (!chamber_backend.shutdown()) {
+            ESP_LOGE(tag, "MAX31865 checked shutdown/release failed");
+        }
+    }
+
+    [[nodiscard]] bool sensor_ready_for_bootstrap() const noexcept
+    {
+        return sensor_bus != nullptr
+            && sensor_bus->initialized()
+            && chamber.configured();
+    }
+
+    // Declaration order is a lifecycle invariant: the already-initialized bus
+    // outlives clock, descriptor/backend, and chamber adapter. Destruction is
+    // therefore descriptor-before-bus even on startup failure.
+    std::unique_ptr<Max31865SpiBusOwner> sensor_bus;
+    EspMonotonicClock clock;
+    Max31865TargetBackend chamber_backend;
+    Max31865ChamberSensor chamber;
+    core::Temperature simulated_food_temperature;
     std::array<core::FoodProbeConfig, 1U> probes;
-    SimulatedChamberSensor chamber;
     SimulatedFoodProbeSource food_source;
     DeterministicChamberController chamber_controller;
     SimulatedHeaterOutput heater;
-    SimulatedClock clock;
     SimulatedEventSink events;
     app::SmokerApplication application;
     RuntimeIdGenerator ids;
@@ -109,6 +148,25 @@ public:
     LocalConnectivityService connectivity;
     BlynkService blynk;
 };
+
+[[nodiscard]] bool wait_for_first_max31865_sample_boundary(
+    const app::IClock& clock
+) noexcept
+{
+    const auto boundary = clock.now()
+        + max31865_production_configuration.first_sample_boundary;
+    const auto boundary_milliseconds =
+        max31865_production_configuration.first_sample_boundary.count();
+    if (boundary_milliseconds <= 0) return false;
+
+    // CONFIG_FREERTOS_HZ is currently 100, so pdMS_TO_TICKS(66) truncates to
+    // 60 ms. One additional tick makes this a bounded >=66 ms startup wait.
+    const auto wait_ticks = static_cast<TickType_t>(
+        pdMS_TO_TICKS(static_cast<std::uint32_t>(boundary_milliseconds)) + 1U
+    );
+    vTaskDelay(wait_ticks);
+    return clock.now() >= boundary;
+}
 
 [[nodiscard]] bool subscribe_control_loop_to_watchdog() noexcept
 {
@@ -163,7 +221,7 @@ void log_target_inventory() noexcept
 
 void control_task(void* const parameter)
 {
-    std::unique_ptr<SimulationContext> context{static_cast<SimulationContext*>(parameter)};
+    std::unique_ptr<RuntimeContext> context{static_cast<RuntimeContext*>(parameter)};
 
     if (!subscribe_control_loop_to_watchdog()) {
         ESP_LOGE(tag, "Control-loop watchdog subscription failed; heater remains OFF");
@@ -237,7 +295,8 @@ void control_task(void* const parameter)
             const auto minimum_free_stack = uxTaskGetStackHighWaterMark2(nullptr);
             ESP_LOGI(
                 tag,
-                "ControlTask cycle=%zu core=%d priority=%lu stack=%lu/%zu bytes minimum free/allocated",
+                "ControlTask cycle=%zu core=%d priority=%lu "
+                "stack=%lu/%zu bytes minimum free/allocated",
                 completed_cycles,
                 static_cast<int>(xPortGetCoreID()),
                 static_cast<unsigned long>(uxTaskPriorityGet(nullptr)),
@@ -251,14 +310,15 @@ void control_task(void* const parameter)
             ? std::optional<float>{snapshot.chamber_target->celsius()}
             : std::nullopt;
         if (!runtime_state_logged || current_demand != last_logged_demand
-            || current_target != last_logged_target) {
+            || current_target != last_logged_target
+            || completed_cycles % runtime_log_period_cycles == 0U) {
             runtime_state_logged = true;
             last_logged_demand = current_demand;
             last_logged_target = current_target;
             if (snapshot.chamber_temperature && snapshot.chamber_target) {
                 ESP_LOGI(
                     tag,
-                    "simulation chamber=%.1f C target=%.1f C heater=%.1f%%",
+                    "MAX31865 chamber=%.1f C target=%.1f C simulated_heater=%.1f%%",
                     static_cast<double>(snapshot.chamber_temperature->celsius()),
                     static_cast<double>(snapshot.chamber_target->celsius()),
                     static_cast<double>(current_demand)
@@ -266,21 +326,21 @@ void control_task(void* const parameter)
             } else if (snapshot.chamber_temperature) {
                 ESP_LOGI(
                     tag,
-                    "simulation chamber=%.1f C target=none heater=%.1f%%",
+                    "MAX31865 chamber=%.1f C target=none simulated_heater=%.1f%%",
                     static_cast<double>(snapshot.chamber_temperature->celsius()),
                     static_cast<double>(current_demand)
                 );
             } else if (snapshot.chamber_target) {
                 ESP_LOGI(
                     tag,
-                    "simulation chamber=unavailable target=%.1f C heater=%.1f%%",
+                    "MAX31865 chamber=unavailable target=%.1f C simulated_heater=%.1f%%",
                     static_cast<double>(snapshot.chamber_target->celsius()),
                     static_cast<double>(current_demand)
                 );
             } else {
                 ESP_LOGI(
                     tag,
-                    "simulation chamber=unavailable target=none heater=%.1f%%",
+                    "MAX31865 chamber=unavailable target=none simulated_heater=%.1f%%",
                     static_cast<double>(current_demand)
                 );
             }
@@ -292,23 +352,61 @@ void control_task(void* const parameter)
         );
         ESP_ERROR_CHECK(watchdog_status);
         xTaskDelayUntil(&last_wake, control_period_ticks);
-        context->clock.advance(control_period);
     }
 }
 
 } // namespace
 
-bool start_simulation_runtime(SimulationRuntimeConfiguration configuration) noexcept
+bool start_ordinary_runtime(OrdinaryRuntimeConfiguration configuration) noexcept
 {
     log_target_inventory();
 
-    auto context = std::unique_ptr<SimulationContext>{
-        new (std::nothrow) SimulationContext{std::move(configuration)}
+    auto sensor_bus = std::unique_ptr<Max31865SpiBusOwner>{
+        new (std::nothrow) Max31865SpiBusOwner{
+            max31865_production_configuration.bus
+        }
+    };
+    const bool sensor_bus_ready = sensor_bus && sensor_bus->initialize();
+    if (!sensor_bus_ready) {
+        ESP_LOGE(
+            tag,
+            "MAX31865 SPI bus or checked GPIO13 MISO pull-up startup failed; "
+            "continuing with unavailable chamber input"
+        );
+    }
+
+    auto context = std::unique_ptr<RuntimeContext>{
+        new (std::nothrow) RuntimeContext{
+            std::move(configuration), std::move(sensor_bus)
+        }
     };
     if (!context) {
-        ESP_LOGE(tag, "Could not allocate simulation context; heater remains OFF");
+        ESP_LOGE(tag, "Could not allocate runtime context; heater remains OFF");
         rollback_pending_firmware_and_reboot_if_needed();
         return false;
+    }
+    if (!context->sensor_ready_for_bootstrap()) {
+        ESP_LOGE(
+            tag,
+            "MAX31865 descriptor/configuration startup failed; continuing "
+            "with unavailable chamber input"
+        );
+    }
+
+    ESP_LOGI(
+        tag,
+        "ordinary composition chamber=MAX31865 SPI2 GPIO12/11/13/10 "
+        "100000Hz PT100 three-wire 50Hz ITS-90 Rref=430.0ohm(provisional) "
+        "food=simulated heater=simulated controller=deterministic PID=inactive"
+    );
+    if (context->sensor_ready_for_bootstrap()
+        && !wait_for_first_max31865_sample_boundary(context->clock)) {
+        ESP_LOGE(
+            tag,
+            "MAX31865 first-sample bootstrap boundary failed; continuing "
+            "with unavailable chamber input"
+        );
+        static_cast<void>(context->chamber_backend.shutdown());
     }
 
     auto* const task_context = context.release();

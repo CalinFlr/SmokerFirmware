@@ -91,7 +91,7 @@ def find_calls(pattern: str, paths: list[Path]) -> list[tuple[Path, int]]:
 
 def check_control_ownership(failures: CheckFailures) -> None:
     production = source_files("components", "main")
-    expected_runtime = "components/smoker_platform/src/simulation_runtime.cpp"
+    expected_runtime = "components/smoker_platform/src/ordinary_runtime.cpp"
     expected_connectivity = "components/smoker_platform/src/local_connectivity.cpp"
     expected_ota = "components/smoker_platform/src/firmware_update_service.cpp"
     expected_history = "components/smoker_platform/src/history_service.cpp"
@@ -304,7 +304,7 @@ def check_reproducible_build_contract(failures: CheckFailures) -> None:
 
 
 def check_m12_transport_contract(failures: CheckFailures) -> None:
-    runtime = (ROOT / "components/smoker_platform/src/simulation_runtime.cpp").read_text()
+    runtime = (ROOT / "components/smoker_platform/src/ordinary_runtime.cpp").read_text()
     connectivity = (ROOT / "components/smoker_platform/src/local_connectivity.cpp").read_text()
     network_support = (
         ROOT / "components/smoker_platform/src/local_network_support.cpp"
@@ -685,8 +685,8 @@ def check_m12_transport_contract(failures: CheckFailures) -> None:
     decisions = (ROOT / "docs/DECISIONS.md").read_text()
     decision_ids = [int(value) for value in re.findall(r"^## D(\d{3})\b", decisions, re.MULTILINE)]
     failures.require(
-        decision_ids == list(range(1, 59)),
-        f"decision IDs must remain ordered and contiguous through D058; found {decision_ids}",
+        decision_ids == list(range(1, 60)),
+        f"decision IDs must remain ordered and contiguous through D059; found {decision_ids}",
     )
     failures.require(
         "## D051 — Missing independent release review is conditional on single-maintainer access"
@@ -743,9 +743,9 @@ def check_m12_transport_contract(failures: CheckFailures) -> None:
         and "c7a027843a3f9cf4b06e7e216b25b2089115568f288c8682defd84c018a5b80f"
         in decisions
         and "max31865_measure()" in decisions
-        and "Production continues to compose `SimulatedChamberSensor`" in decisions
+        and "D059 records" in decisions
         and "synchronous safety latches `ChamberSensorInvalid`" in decisions,
-        "D056 must preserve the exact-pinned MAX31865 dependency, physical gate, and fail-OFF boundary",
+        "D056 must preserve the exact-pinned MAX31865 dependency, evidence chronology, and fail-OFF boundary",
     )
     failures.require(
         "## D057 — M9 imports the registry ADS1115 driver before physical activation"
@@ -771,6 +771,21 @@ def check_m12_transport_contract(failures: CheckFailures) -> None:
         and "unencrypted NVS" in decisions
         and "second SPSC mailbox" in decisions,
         "D058 must preserve the exact MQTT pin, UART/NVS risk, and two-mailbox boundary",
+    )
+    failures.require(
+        "## D059 — M7 activates MAX31865 as the ordinary authoritative chamber source"
+        in decisions
+        and "pull-independent SPI configuration reads" in decisions
+        and "exact active `0xD1`" in decisions
+        and "terminal `0x11`" in decisions
+        and "provisional" in decisions
+        and "same real ESP monotonic clock" in decisions
+        and "descriptor, then releases the SPI bus" in decisions
+        and "Food probes remain simulated" in decisions
+        and "heater output remains simulated" in decisions
+        and "latched session" in decisions
+        and "controlled open/short" in decisions,
+        "D059 must preserve the evidence-bounded MAX31865 production activation and mixed-I/O safety boundaries",
     )
 
     workflow = "\n".join(
@@ -816,10 +831,13 @@ def check_m12_transport_contract(failures: CheckFailures) -> None:
         "firmware check must use a prebuilt fixed response without post-admission allocation",
     )
     failures.require(
-        runtime.count("rollback_pending_firmware_and_reboot_if_needed();") == 2
-        and "Could not allocate simulation context" in runtime
-        and "Could not create ControlTask" in runtime,
-        "pending firmware must roll back when critical runtime bootstrap fails",
+        "Could not allocate runtime context" in runtime
+        and "Could not create ControlTask" in runtime
+        and runtime.find("rollback_pending_firmware_and_reboot_if_needed();")
+            > runtime.find("Could not allocate runtime context")
+        and runtime.rfind("rollback_pending_firmware_and_reboot_if_needed();")
+            > runtime.find("Could not create ControlTask"),
+        "pending firmware must roll back when critical runtime construction fails",
     )
     failures.require(
         'coordinator_.fail("ota_task_unavailable")' in ota
@@ -924,6 +942,15 @@ def check_m7_max31865_contract(failures: CheckFailures) -> None:
     ).read_text()
     sensor = (platform / "src/max31865_sensor.cpp").read_text()
     target = (platform / "src/max31865_target_backend.cpp").read_text()
+    production_configuration = (
+        platform
+        / "include/smoker/platform/max31865_production_configuration.hpp"
+    ).read_text()
+    spi_bus_header = (
+        platform / "include/smoker/platform/max31865_spi_bus.hpp"
+    ).read_text()
+    spi_bus = (platform / "src/max31865_spi_bus.cpp").read_text()
+    monotonic_clock = (platform / "src/esp_monotonic_clock.cpp").read_text()
     board_pins = (
         platform / "include/smoker/platform/max31865_board_pins.hpp"
     ).read_text()
@@ -934,9 +961,18 @@ def check_m7_max31865_contract(failures: CheckFailures) -> None:
         platform / "src/max31865_connected_diagnostic.cpp"
     ).read_text()
     platform_cmake = (platform / "CMakeLists.txt").read_text()
-    runtime = (platform / "src/simulation_runtime.cpp").read_text()
+    runtime = (platform / "src/ordinary_runtime.cpp").read_text()
+    runtime_header = (
+        platform / "include/smoker/platform/ordinary_runtime.hpp"
+    ).read_text()
     main_source = (ROOT / "main/app_main.cpp").read_text()
     tests = (ROOT / "tests/host/smoker_m7_tests.cpp").read_text()
+    web_assets = (platform / "src/web_assets.hpp").read_text()
+    readme = (ROOT / "README.md").read_text()
+    architecture = (ROOT / "docs/ARCHITECTURE.md").read_text()
+    roadmap = (ROOT / "docs/ROADMAP.md").read_text()
+    traceability = (ROOT / "docs/TRACEABILITY.md").read_text()
+    ota = (platform / "src/firmware_update_service.cpp").read_text()
     diagnostic_kconfig = (ROOT / "main/Kconfig.projbuild").read_text()
     diagnostic_defaults = (
         ROOT / "diagnostics/max31865/sdkconfig.defaults"
@@ -956,9 +992,13 @@ def check_m7_max31865_contract(failures: CheckFailures) -> None:
     failures.require(
         '"src/max31865_sensor.cpp"' in platform_cmake
         and '"src/max31865_target_backend.cpp"' in platform_cmake
+        and '"src/max31865_spi_bus.cpp"' in platform_cmake
+        and '"src/esp_monotonic_clock.cpp"' in platform_cmake
+        and '"src/ordinary_runtime.cpp"' in platform_cmake
+        and '"src/simulation_runtime.cpp"' not in platform_cmake
         and platform_cmake.find('"src/max31865_target_backend.cpp"')
             > platform_cmake.find("if(ESP_PLATFORM)"),
-        "the MAX31865 policy must be host-buildable and its real backend target-only",
+        "the MAX31865 policy must be host-buildable and its real runtime support target-only",
     )
     sensor_read = source_section(
         sensor,
@@ -974,35 +1014,50 @@ def check_m7_max31865_contract(failures: CheckFailures) -> None:
         and bool(sensor_read)
         and "result.status != Max31865ReadStatus::Valid" in sensor_read
         and "std::isfinite(result.celsius)" in sensor_read
+        and "result.celsius < validity_policy_.minimum_celsius" in sensor_read
+        and "result.celsius > validity_policy_.maximum_celsius" in sensor_read
         and "last" not in sensor_read.lower(),
-        "the MAX31865 chamber adapter must map only each current finite valid sample",
+        "the MAX31865 chamber adapter must map only each current finite in-range valid sample",
     )
     failures.require(
         "reference_resistance_ohms;" in sensor_header
         and "Max31865FilterFrequency filter;" in sensor_header
         and "Max31865RtdStandard standard;" in sensor_header
+        and "float minimum_celsius;" in sensor_header
+        and "float maximum_celsius;" in sensor_header
+        and "valid_max31865_temperature_validity_policy" in sensor
+        and "policy.minimum_celsius < policy.maximum_celsius" in sensor
+        and "std::isfinite(policy.minimum_celsius)" in sensor
+        and "std::isfinite(policy.maximum_celsius)" in sensor
         and "spi_host_device_t spi_host;" in target_header
         and "gpio_num_t chip_select_gpio;" in target_header
         and "std::uint32_t clock_speed_hz;" in target_header,
-        "unknown MAX31865 hardware values must remain explicit required configuration",
+        "unknown MAX31865 hardware and sensor-validity values must remain explicit required configuration",
     )
 
     for api in (
         "max31865_init_desc(",
-        "max31865_set_config(",
         "max31865_get_fault_status(",
-        "max31865_clear_fault_status(",
         "max31865_read_temperature(",
         "max31865_free_desc(",
     ):
         failures.require(api in target, f"the target MAX31865 backend must call {api}")
     failures.require(
-        "MAX31865_MODE_AUTO" in target
-        and "MAX31865_3WIRE" in target
+        "MAX31865_3WIRE" in target
         and "max31865_pt100_nominal_ohms" in target
         and "~Max31865TargetBackend()" in target
-        and "release_descriptor();" in target,
-        "the inactive target backend must use provisional continuous PT100/3-wire RAII",
+        and "shutdown()" in target
+        and "release_descriptor()" in target,
+        "the active target backend must use explicit PT100/3-wire configuration and checked RAII shutdown",
+    )
+    failures.require(
+        "max31865_set_config(" not in target
+        and "max31865_clear_fault_status(" not in target
+        and "write_exact_configuration(" in target
+        and "read_exact_configuration(" in target
+        and "write_and_verify_exact_configuration(" in target
+        and "spi_device_transmit(" in target,
+        "production must avoid driver read-modify-write configuration helpers and use exact checked register access",
     )
 
     production_text = "\n".join(
@@ -1011,7 +1066,7 @@ def check_m7_max31865_contract(failures: CheckFailures) -> None:
     read_section = source_section(
         target,
         "Max31865ReadResult Max31865TargetBackend::read_continuous()",
-        "void Max31865TargetBackend::release_descriptor()",
+        "bool Max31865TargetBackend::shutdown()",
     )
     failures.require(bool(read_section), "the target MAX31865 read boundary is missing")
     readiness_check = read_section.find("if (!readiness_.sample_ready())")
@@ -1028,16 +1083,16 @@ def check_m7_max31865_contract(failures: CheckFailures) -> None:
         "bool Max31865TargetBackend::configure_device()",
         "void Max31865TargetBackend::clear_fault_for_later_read()",
     )
-    set_config = configure_section.find("max31865_set_config(")
+    exact_config = configure_section.find("write_and_verify_exact_configuration(")
     readiness_reset = configure_section.find(
         "readiness_.continuous_configuration_applied()"
     )
     failures.require(
         bool(configure_section)
         and "readiness_.invalidate()" in configure_section
-        and set_config >= 0
-        and readiness_reset > set_config,
-        "every successful continuous MAX31865 configuration must reset sample readiness",
+        and exact_config >= 0
+        and readiness_reset > exact_config,
+        "every exact verified continuous MAX31865 configuration must reset sample readiness",
     )
     initialize_section = source_section(
         target,
@@ -1045,7 +1100,7 @@ def check_m7_max31865_contract(failures: CheckFailures) -> None:
         "Max31865ReadResult Max31865TargetBackend::read_continuous()",
     )
     failures.require(
-        "release_descriptor();" in initialize_section
+        "release_descriptor()" in initialize_section
         and "if (configured_)" not in initialize_section,
         "MAX31865 reinitialization must conservatively replace configuration and readiness",
     )
@@ -1055,13 +1110,13 @@ def check_m7_max31865_contract(failures: CheckFailures) -> None:
         "bool Max31865TargetBackend::valid_configuration()",
     )
     recovery_invalidate = recovery_section.find("readiness_.invalidate()")
-    fault_clear = recovery_section.find("max31865_clear_fault_status(")
+    fault_clear = recovery_section.find("write_exact_configuration(clear_command)")
     recovery_configure = recovery_section.find("configure_device()")
     failures.require(
         recovery_invalidate >= 0
         and fault_clear > recovery_invalidate
         and recovery_configure > fault_clear,
-        "MAX31865 fault recovery must invalidate readiness before clear/reconfiguration",
+        "MAX31865 fault recovery must invalidate readiness before exact clear/reconfiguration",
     )
     for forbidden in (
         "max31865_measure(",
@@ -1077,7 +1132,7 @@ def check_m7_max31865_contract(failures: CheckFailures) -> None:
         "xTaskCreate",
     ):
         failures.require(
-            forbidden not in target,
+            forbidden not in read_section,
             f"MAX31865 critical read must not contain {forbidden}",
         )
     failures.require(
@@ -1089,11 +1144,177 @@ def check_m7_max31865_contract(failures: CheckFailures) -> None:
         "the MAX31865 adapter/backend must not create a task",
     )
     failures.require(
-        "SimulatedChamberSensor" in runtime
-        and "start_simulation_runtime" in main_source
-        and "Max31865TargetBackend" not in runtime
-        and "Max31865TargetBackend" not in main_source,
-        "production composition must remain on SimulatedChamberSensor",
+        "Max31865TargetBackend chamber_backend" in runtime
+        and "Max31865ChamberSensor chamber" in runtime
+        and "Max31865SpiBusOwner" in runtime
+        and "EspMonotonicClock clock" in runtime
+        and "SimulatedChamberSensor" not in runtime
+        and "SimulatedFoodProbeSource food_source" in runtime
+        and "DeterministicChamberController chamber_controller" in runtime
+        and "SimulatedHeaterOutput heater" in runtime
+        and "start_ordinary_runtime" in main_source
+        and "start_ordinary_runtime" in runtime
+        and '"smoker/platform/ordinary_runtime.hpp"' in main_source
+        and "OrdinaryRuntimeConfiguration" in runtime_header
+        and not (platform / "src/simulation_runtime.cpp").exists()
+        and not (
+            platform / "include/smoker/platform/simulation_runtime.hpp"
+        ).exists(),
+        "ordinary production composition must use MAX31865 chamber input with simulated food/heater and deterministic control",
+    )
+    failures.require(
+        "spi_bus_initialize(" in spi_bus
+        and "gpio_set_pull_mode(" in spi_bus
+        and "GPIO_PULLUP_ONLY" in production_configuration
+        and "GPIO_FLOATING" in spi_bus
+        and "SPI_DMA_DISABLED" in spi_bus
+        and "spi_bus_free(" in spi_bus
+        and "owns_initialized_bus(" in spi_bus
+        and "bus_owner_->owns_initialized_bus(configuration_.spi_host)" in target
+        and "~Max31865SpiBusOwner()" in spi_bus
+        and "Max31865SpiBusOwner(const Max31865SpiBusOwner&) = delete" in spi_bus_header,
+        "the production SPI bus must have checked MISO pull-up and explicit non-copyable RAII ownership",
+    )
+    bus_initialize = spi_bus.find("spi_bus_initialize(")
+    pull_setup = spi_bus.find("gpio_set_pull_mode(", bus_initialize)
+    bus_release = spi_bus.find("spi_bus_free(")
+    pull_cleanup = spi_bus.find("GPIO_FLOATING", bus_release)
+    failures.require(
+        bus_initialize >= 0
+        and pull_setup > bus_initialize
+        and bus_release > pull_setup
+        and pull_cleanup > bus_release,
+        "GPIO13 pull-up must follow bus initialization and floating cleanup must follow successful bus release",
+    )
+    failures.require(
+        "esp_timer_get_time()" in monotonic_clock
+        and "EspMonotonicClock clock" in runtime
+        and "max31865_production_configuration.sensor" in runtime
+        and "sensor_bus.get()" in runtime
+        and "heater,\n              clock," in runtime,
+        "MAX31865 readiness and application timing must share the real ESP monotonic clock",
+    )
+
+    for exact_value in (
+        "SPI2_HOST",
+        "GPIO_NUM_12",
+        "GPIO_NUM_11",
+        "GPIO_NUM_13",
+        "GPIO_NUM_10",
+        "100'000U",
+        "100.0F",
+        "430.0F",
+        "-50.0F",
+        "200.0F",
+        "GPIO_PULLUP_ONLY",
+        "MAX31865_3WIRE",
+        "Max31865FilterFrequency::Hz50",
+        "Max31865RtdStandard::Its90",
+        "0xD1U",
+        "0x11U",
+        "std::chrono::milliseconds{66}",
+    ):
+        failures.require(
+            exact_value in production_configuration,
+            f"the centralized production MAX31865 configuration is missing {exact_value}",
+        )
+    failures.require(
+        "T-pass connected evidence" in production_configuration
+        and "Provisional operational choice" in production_configuration
+        and "not a measurement" in production_configuration
+        and "max31865_production_configuration.sensor" in runtime
+        and "max31865_production_configuration.bus" in runtime,
+        "production must centralize values and distinguish observed evidence from provisional choices",
+    )
+
+    bus_member = runtime.find("std::unique_ptr<Max31865SpiBusOwner> sensor_bus;")
+    backend_member = runtime.find("Max31865TargetBackend chamber_backend;")
+    chamber_member = runtime.find("Max31865ChamberSensor chamber;")
+    startup_bus = runtime.find("sensor_bus->initialize()")
+    startup_context = runtime.find("new (std::nothrow) RuntimeContext")
+    startup_wait = runtime.find("wait_for_first_max31865_sample_boundary(context->clock)")
+    startup_task_handoff = runtime.find("auto* const task_context = context.release()")
+    task_create = runtime.find("xTaskCreateStaticPinnedToCore(")
+    failures.require(
+        bus_member >= 0
+        and backend_member > bus_member
+        and chamber_member > backend_member
+        and startup_bus >= 0
+        and startup_context > startup_bus
+        and startup_wait > startup_context
+        and startup_task_handoff > startup_wait
+        and task_create > startup_task_handoff
+        and "chamber_backend.shutdown()" in runtime,
+        "the SPI bus must precede descriptor creation, bootstrap readiness must precede ControlTask, and descriptor shutdown must precede bus destruction",
+    )
+    startup = source_section(
+        runtime,
+        "bool start_ordinary_runtime(",
+        "} // namespace smoker::platform",
+    )
+    sensor_bus_failure = startup.find(
+        "SPI bus or checked GPIO13 MISO pull-up startup failed"
+    )
+    descriptor_failure = startup.find(
+        "MAX31865 descriptor/configuration startup failed"
+    )
+    boundary_failure = startup.find(
+        "MAX31865 first-sample bootstrap boundary failed"
+    )
+    runtime_allocation = startup.find("Could not allocate runtime context")
+    task_failure = startup.find("Could not create ControlTask")
+    failures.require(
+        sensor_bus_failure >= 0
+        and descriptor_failure > sensor_bus_failure
+        and boundary_failure > descriptor_failure
+        and "continuing with unavailable chamber input" in startup
+        and "context->sensor_ready_for_bootstrap()" in startup
+        and "context->chamber_backend.shutdown()" in startup
+        and runtime_allocation >= 0
+        and startup.find(
+            "rollback_pending_firmware_and_reboot_if_needed();",
+            runtime_allocation,
+        ) > runtime_allocation
+        and task_failure >= 0
+        and startup.find(
+            "rollback_pending_firmware_and_reboot_if_needed();",
+            task_failure,
+        ) > task_failure,
+        "sensor hardware/bootstrap failures must continue into the observable runtime while critical allocation/task failures retain rollback",
+    )
+    failures.require(
+        "snapshot.active_fault" in ota
+        and "validation_fault_.store(true" in ota
+        and "required_validation_cycles" in ota
+        and "esp_ota_mark_app_valid_cancel_rollback()" in ota,
+        "a sensor-faulting pending image must use normal fault rollback and retain the five-safe-cycle mark-valid contract",
+    )
+    failures.require(
+        "I/O MIXT" in web_assets
+        and "I/O SIMULAT" not in web_assets
+        and "ordinary mixed-I/O" in readme
+        and "ordinary mixed-I/O" in architecture
+        and "ordinary runtime" in roadmap
+        and "ordinary-runtime contracts" in traceability
+        and "SimulationContext" not in traceability,
+        "active UI/docs must describe the ordinary mixed-I/O composition and current runtime name",
+    )
+    control_loop = source_section(runtime, "void control_task(", "bool start_ordinary_runtime(")
+    failures.require(
+        bool(control_loop)
+        and "application.tick();" in control_loop
+        and "clock.advance(" not in control_loop
+        and "Max31865" not in control_loop.split("application.tick();", 1)[0]
+        and "xTaskCreate" not in control_loop,
+        "the sole ControlTask must perform ordinary MAX31865 reads only through the application tick using real time",
+    )
+    failures.require(
+        "gpio_set_level(" not in runtime
+        and "gpio_set_level(" not in target
+        and "gpio_set_level(" not in spi_bus
+        and "Ssr" not in runtime
+        and "GpioHeater" not in runtime,
+        "ordinary production must not introduce SSR/GPIO heater output",
     )
 
     failures.require(
@@ -1198,7 +1419,7 @@ def check_m7_max31865_contract(failures: CheckFailures) -> None:
     )
     for forbidden in (
         "SmokerApplication",
-        "start_simulation_runtime",
+        "start_ordinary_runtime",
         "IHeaterOutput",
         "max31865_read_temperature(",
         "max31865_measure(",
@@ -1224,6 +1445,11 @@ def check_m7_max31865_contract(failures: CheckFailures) -> None:
         "test_max31865_fault_recovery_requires_fresh_current_value",
         "test_max31865_read_is_observed_allocation_free",
         "test_max31865_premature_application_tick_latches_fault_and_heater_off",
+        "test_max31865_later_driver_failure_latches_without_cached_temperature",
+        "test_max31865_temperature_validity_policy_is_finite_ordered_and_inclusive",
+        "test_max31865_temperature_validity_accepts_boundaries_and_rejects_outside",
+        "test_max31865_initialization_failure_while_idle_latches_safety_fault",
+        "test_max31865_valid_then_out_of_range_latches_without_cached_temperature",
     ):
         failures.require(evidence in tests, f"M7 host evidence is missing: {evidence}")
 
@@ -1251,7 +1477,7 @@ def check_m8_pid_contract(failures: CheckFailures) -> None:
         platform / "include/smoker/platform/simulated_adapters.hpp"
     ).read_text()
     simulated = (platform / "src/simulated_adapters.cpp").read_text()
-    runtime = (platform / "src/simulation_runtime.cpp").read_text()
+    runtime = (platform / "src/ordinary_runtime.cpp").read_text()
     main_source = (ROOT / "main/app_main.cpp").read_text()
     platform_cmake = (platform / "CMakeLists.txt").read_text()
     manifest = (platform / "idf_component.yml").read_text()
@@ -1579,7 +1805,7 @@ def check_m9_ads1115_contract(failures: CheckFailures) -> None:
     source = (platform / "src/ads1115_food_probe_source.cpp").read_text()
     target = (platform / "src/ads1115_target_backend.cpp").read_text()
     platform_cmake = (platform / "CMakeLists.txt").read_text()
-    runtime = (platform / "src/simulation_runtime.cpp").read_text()
+    runtime = (platform / "src/ordinary_runtime.cpp").read_text()
     main_source = (ROOT / "main/app_main.cpp").read_text()
     tests = (ROOT / "tests/host/smoker_m9_tests.cpp").read_text()
     pinned_driver_path = (
@@ -1782,7 +2008,7 @@ def check_m9_ads1115_contract(failures: CheckFailures) -> None:
     )
     failures.require(
         "SimulatedFoodProbeSource" in runtime
-        and "start_simulation_runtime" in main_source
+        and "start_ordinary_runtime" in main_source
         and "Ads1115FoodProbeSource" not in runtime
         and "Ads1115TargetBackend" not in runtime
         and "Ads1115FoodProbeSource" not in main_source
@@ -1815,7 +2041,7 @@ def check_m9_ads1115_contract(failures: CheckFailures) -> None:
 
 
 def check_m14_history_contract(failures: CheckFailures) -> None:
-    runtime = (ROOT / "components/smoker_platform/src/simulation_runtime.cpp").read_text()
+    runtime = (ROOT / "components/smoker_platform/src/ordinary_runtime.cpp").read_text()
     history = (ROOT / "components/smoker_platform/src/history_service.cpp").read_text()
     support = (ROOT / "components/smoker_platform/src/history_support.cpp").read_text()
     header = (ROOT / "components/smoker_platform/include/smoker/platform/history_support.hpp").read_text()
@@ -1834,7 +2060,7 @@ def check_m14_history_contract(failures: CheckFailures) -> None:
         tick >= 0 and publish > tick and observe > publish,
         "ControlTask must publish history only after the safety-gated tick and snapshot",
     )
-    control_loop = source_section(runtime, "void control_task(", "bool start_simulation_runtime(")
+    control_loop = source_section(runtime, "void control_task(", "bool start_ordinary_runtime(")
     failures.require(
         bool(control_loop)
         and "history_mailbox.observe(snapshot)" in control_loop
@@ -1966,7 +2192,7 @@ def check_m15_blynk_contract(failures: CheckFailures) -> None:
     runtime_header = (
         platform / "include/smoker/platform/runtime_transport_support.hpp"
     ).read_text()
-    runtime = (platform / "src/simulation_runtime.cpp").read_text()
+    runtime = (platform / "src/ordinary_runtime.cpp").read_text()
     manifest = (platform / "idf_component.yml").read_text()
     lock = (ROOT / "dependencies.lock").read_text()
     defaults = (ROOT / "sdkconfig.defaults").read_text()

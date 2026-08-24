@@ -2,7 +2,7 @@
 
 Status: **M6A complete; M6B external hardware incomplete**
 
-Last evidence update: **2026-08-22**
+Last evidence update: **2026-08-24**
 
 This file is the canonical inventory for every physical component used by the
 product. It is written so that a human or an AI agent can distinguish an
@@ -64,23 +64,48 @@ before either gate is marked complete.
 - Final controller board: SuooTci ESP32-S3, seller code `KFB003` / eMAG
   product `D1T7M22BM`, using the user-reported N16R8 module variant.
 - MAX31865 with a three-wire PT100 is selected by the user as the first chamber
-  frontend to connect; the exact physical module/revision and remaining RTD
-  assembly facts are not yet documented.
+  frontend to connect. The supplier page for probe SKU `88056` documents a
+  PT100, assembled range -50..+200 C, tolerance `F0.15`, SUS304 4 mm x 100 mm
+  sheath, 1 m shielded FEP cable, 1/4 NPT fitting, and approximately 100 ohm at
+  0 C / 138.5 ohm at 100 C. Those are supplier-documentation facts, not
+  inspection or measurement of the connected unit; the exact MAX31865
+  module/revision and fitted reference resistor remain unknown.
 - The maintainer reports the final MAX31865 wiring is already soldered to SPI2
   with GPIO12 SCK, GPIO11 MOSI, GPIO13 MISO, and GPIO10 CS. This is a confirmed
   production assignment, not evidence of continuity, power, or SPI response.
+- The maintainer reports ESP32 3V3 is connected to module VIN; the module is
+  configured for three-wire use, including its separate 2/3-wire jumper; and
+  the probe leads are red to F+, red to RTD+, blue to RTD-, with RTD- jumpered
+  to F-. These reports do not establish continuity, resistance, module logic
+  behavior, or shield termination.
+- The first connected diagnostic on 2026-08-24 observed software-SPI MISO
+  following its configured pulls (`0xff` up and `0x00` down) and failed before
+  complementary configuration or driver transactions. Fallback shutdown
+  requested `0x10` but read `0x00`; physical converter shutdown was therefore
+  not verified. The ordinary signed simulated firmware was restored.
+- A later corrected connected setup produced pull-independent initial
+  configuration `0x11`, exact software-SPI readbacks `0x00`, `0x91`, and
+  active `0xD1`, exact software terminal `0x11`, and the same driver initial,
+  active, and terminal bytes. Ten driver samples were raw 8548/8549 with
+  `RRTD/RREF` 0.260864/0.260895, fault zero, no transaction errors, and no
+  sensor-fault samples. A separate run observed ten raw-zero samples reporting
+  fault `0x40`; that is observed fault reporting, not controlled open/short
+  injection.
 - Two ADS1115 converters are selected by the user for the external analog/probe
   path; their exact modules, addresses, channel roles, probe circuits, and
   wiring are not yet documented. The SSR interface is not yet identified.
 - The project will eventually control an electric smoker heater.
-- Real chamber sensing, food-probe integration, SSR wiring, independent thermal/electrical protection, current sensing, fan control, and smoke-source integration are separate hardware milestones.
+- Real chamber sensing is active with the evidence limits above. Food-probe
+  integration, SSR wiring, independent thermal/electrical protection, current
+  sensing, fan control, and smoke-source integration remain separate hardware
+  milestones.
 
 ## Component register
 
 | ID | Product role | Selected component | Current classification | Integration status |
 |---|---|---|---|---|
-| `CTRL-001` | Main controller | SuooTci `KFB003` / eMAG `D1T7M22BM`; N16R8 variant reported | Carrier identity **CONFIRMED FROM DOCUMENTATION**; SoC/storage/USB **CONFIRMED FROM HARDWARE** | M6A complete; simulated I/O only |
-| `CHAMBER-001` | Authoritative chamber sensor/frontend | MAX31865 with PT100, three-wire; final SPI2/GPIO12/11/13/10 wiring assigned; exact physical module and remaining RTD facts pending | Converter/RTD/wire and soldered pin assignment **CONFIRMED FROM DOCUMENTATION** — maintainer report; continuity/module/electrical facts **UNCONFIRMED** | Assignment is in target firmware; adapter remains inactive and connected validation is blocked at M6B/M7 |
+| `CTRL-001` | Main controller | SuooTci `KFB003` / eMAG `D1T7M22BM`; N16R8 variant reported | Carrier identity **CONFIRMED FROM DOCUMENTATION**; SoC/storage/USB **CONFIRMED FROM HARDWARE** | M6A complete; ordinary runtime uses real chamber input with simulated food/heater I/O |
+| `CHAMBER-001` | Authoritative chamber sensor/frontend | MAX31865 with supplier-documented PT100 probe SKU `88056`, three-wire; final SPI2/GPIO12/11/13/10 wiring assigned; exact physical module and fitted Rref pending | Probe characteristics and assembly **CONFIRMED FROM DOCUMENTATION**; SPI/configuration/raw/shutdown behavior **CONFIRMED FROM HARDWARE**; continuity/module identity/Rref/electrical facts **UNCONFIRMED** | Ordinary production uses MAX31865 with provisional 430-ohm Rref and ITS-90; functional bring-up T-pass and build activation complete; calibration, sustained runtime, controlled faults, and remaining M6B/M7 physical validation pending |
 | `PROBES-001` | Food-probe analog acquisition | Two ADS1115 converters selected; complete probe frontend and channel map pending | Converter quantity/type **CONFIRMED FROM DOCUMENTATION** — user selection; modules/electrical design **UNCONFIRMED** | Software adapter implemented/inactive; production, wiring, and connected validation blocked at M6B/M9 |
 | `HEATER-001` | SSR/heater power interface | Not selected | **UNCONFIRMED** | Blocked at M6B; no GPIO assigned |
 | `SAFETY-001` | Independent thermal/electrical cutoff | Not designed | **UNCONFIRMED** | Required at M6B |
@@ -103,12 +128,13 @@ Until each board/component fact is confirmed:
 - do not implement fan control;
 - do not implement smoke-generator control.
 
-Production must use simulated sensor/probe/heater adapters until the
-corresponding M6B hardware is confirmed. An inactive external-adapter software
-boundary may be host-tested and cross-built when every unknown hardware value
-remains required configuration and no bus, pin, or runtime activation is
-invented. M6A may exercise only the controller board and its integrated
-capabilities; this does not validate external control hardware.
+Production must use simulated adapters until the corresponding activation has
+documented facts, an explicit decision, and proportionate evidence. MAX31865
+is the first activated exception: its functional connected evidence supports
+ordinary chamber acquisition, while provisional Rref/standard choices and all
+remaining physical limits stay visibly classified. M6A may exercise only the
+controller board and its integrated capabilities; this does not validate
+external control hardware.
 
 ## `CHAMBER-001` — MAX31865 chamber-frontend dossier
 
@@ -117,9 +143,13 @@ capabilities; this does not validate external control hardware.
 The user selected MAX31865 on 2026-08-18 as the first external device to
 connect and as the intended authoritative chamber frontend, then identified
 the RTD as PT100 with three leads. This fixes the future driver choices to
-`rtd_nominal = 100.0F` and `MAX31865_3WIRE`. It does not identify the purchased
-breakout-board manufacturer, revision, fitted reference resistor, PT100
-accuracy/range/construction, or connector pinout.
+`rtd_nominal = 100.0F` and `MAX31865_3WIRE`. The supplier page for probe SKU
+`88056` documents the assembly as PT100, -50..+200 C, tolerance `F0.15`, SUS304
+4 mm x 100 mm sheath, 1 m shielded FEP cable, 1/4 NPT fitting, and approximately
+100 ohm at 0 C / 138.5 ohm at 100 C. It does not identify the purchased
+breakout-board manufacturer, revision, fitted reference resistor, or exact RTD
+standard, and the connected probe has not been inspected or measured against
+those supplier facts.
 
 ESP-IDF 6.0.2 contains the SPI master driver but no built-in MAX31865 device
 driver. The project therefore uses the next approved dependency source, ESP
@@ -134,15 +164,17 @@ Component Registry:
 | Conversion freshness | RTD MSB/LSB POR is `0x00`; maximum first conversion after enabling automatic conversion is 55 ms at 60 Hz and 66 ms at 50 Hz | **CONFIRMED FROM DOCUMENTATION** — Analog Devices MAX31865 datasheet |
 | Raw-zero driver behavior | 1.0.8 shifts raw zero to zero resistance and its below-zero polynomial returns approximately -242.02 C with `ESP_OK` when the raw fault bit is clear | **CONFIRMED FROM DOCUMENTATION** — versioned driver source |
 | Production SPI assignment | SPI2; GPIO12 SCK, GPIO11 MOSI, GPIO13 MISO, GPIO10 CS, already soldered on the product board | **CONFIRMED FROM DOCUMENTATION** — maintainer report on 2026-08-22; not continuity or transaction evidence |
-| Current firmware use | final board pins are centralized in target platform code; inactive adapter and real API backend compile; the opt-in diagnostic has checked command-zero converter quiescence before resource release; ordinary composition still uses `SimulatedChamberSensor` | **CONFIRMED FROM CONFIG** — source, host tests, and ESP-IDF 6.0.2 cross-build only; physical shutdown is unexecuted |
+| Current firmware use | centralized ordinary runtime owns SPI2 bus, checked GPIO13 MISO pull-up, exact-config backend, real monotonic clock, and `Max31865ChamberSensor`; the explicit inclusive -50..+200 C validity policy comes from the supplier's assembled probe range; food probes/heater remain simulated and control deterministic; opt-in diagnostic stays default-OFF and isolated | **CONFIRMED FROM CONFIG** for firmware behavior; range **CONFIRMED FROM DOCUMENTATION** — supplier listing; not calibration |
+| First connected diagnostic | exact opt-in image booted on 2026-08-24; software-SPI configuration readback followed the MISO pulls (`0xff` up, `0x00` down), so complementary patterns, the driver stage, and sampling were not entered; fallback shutdown requested `0x10` and observed `0x00`; ordinary signed firmware was then restored and verified | **CONFIRMED FROM HARDWARE** for this failed observation only; converter communication and physical quiescence remain **UNCONFIRMED** |
+| Corrected connected diagnostic | pull-independent `0x11`; exact software `0x00`/`0x91`/`0xD1` and terminal `0x11`; driver initial `0x11`, active `0xD1`, ten raw 8548/8549 samples with zero fault/transaction/sensor-fault counts, and terminal `0x11` | **CONFIRMED FROM HARDWARE** — functional SPI/raw/shutdown T-pass; not calibration, accuracy, or controlled fault injection |
 
-The inactive M7 adapter is implemented in `smoker_platform` behind the existing
+The active M7 adapter is implemented in `smoker_platform` behind the existing
 `IChamberSensor` port and creates no sensor task. A host-safe seam owns only
-project result/configuration types; the target-only RAII backend calls the real
-1.0.8 `max31865_init_desc()`, `max31865_set_config()`,
-`max31865_get_fault_status()`, `max31865_read_temperature()`,
-`max31865_clear_fault_status()`, and `max31865_free_desc()` APIs. It
-provisionally selects continuous conversion with bias. Configuration success is
+project result/configuration types; target-only RAII owns the SPI bus and real
+1.0.8 descriptor. Production calls init/fault/temperature/free APIs but avoids
+the driver's configuration and fault-clear read-modify-write helpers, using
+exact checked register writes instead. It selects continuous conversion with
+bias. Configuration success is
 reported separately from sample readiness. A host-tested monotonic policy
 prevents all fault/temperature register reads before 55 ms at 60 Hz or 66 ms at
 50 Hz, including after fault clear/reconfiguration. Early reads return explicit
@@ -156,15 +188,21 @@ The datasheet conversion interval also does not determine module-specific
 input-network/bias settling; that requirement stays pending until the physical
 module and frontend are known.
 
-Reference resistance, filter, RTD standard, and SPI clock remain explicit
-required configuration with no project defaults. The final target mapping is
+Production centralizes provisional Rref 430.0 ohm, 50 Hz, ITS-90, and 100 kHz
+without treating them as generic adapter defaults. The final target mapping is
 SPI2 with GPIO12 SCK, GPIO11 MOSI, GPIO13 MISO, and GPIO10 CS; PT100 nominal
 100 ohm and three-wire are also fixed from the confirmed user selection. Any
 descriptor/configuration/SPI/conversion error, reported fault, or
-invalid/non-finite result becomes an absent authoritative reading without
+invalid/non-finite result or finite value outside the inclusive supplier-
+documented -50..+200 C range becomes an absent authoritative reading without
 last-value reuse; the existing synchronous safety path then latches fault and
-forces heater OFF. This is host behavior plus target API cross-build evidence,
-not a physically validated conversion policy.
+forces heater OFF. A successful setup completes initialization and first-
+conversion readiness before `ControlTask` is created. Sensor bootstrap failure
+instead starts the ordinary observation runtime with an unavailable chamber,
+so its first tick publishes the latched FAULT and OFF state. This is build-
+validated activation plus
+functional connected evidence, not calibrated accuracy or a fully validated
+physical conversion policy.
 
 The default-OFF diagnostic temporarily enables VBIAS and automatic conversion
 only inside its bounded register/sample procedure. Before software-SPI pins or
@@ -174,22 +212,75 @@ reads back exact configuration `0x11`: normally off, VBIAS off, three-wire,
 retain bounded best-effort RAII cleanup; software-SPI first restores a CS-high
 frame boundary, and descriptor cleanup still attempts removal before bus
 release. This is **CONFIRMED FROM CONFIG** for the intended source
-sequence only. No connected command has been run, so module acceptance of the
-write and physical quiescence remain **UNCONFIRMED**.
+sequence. The first connected run did not reach either normal terminal `0x11`;
+the later corrected run observed exact software and driver terminal `0x11`.
+Those readbacks are **CONFIRMED FROM HARDWARE** transaction evidence, not an
+independent electrical measurement of physical quiescence.
 
-### Physical facts still required before runtime activation
+### First connected diagnostic result — 2026-08-24
+
+With the heater, SSR, and mains connection physically disconnected, the
+separately signed diagnostic composition was installed through the signed
+serial helper and monitored for one bounded run. It reported the centralized
+SPI2/GPIO12 SCK/GPIO11 MOSI/GPIO13 MISO/GPIO10 CS assignment and 100 kHz
+mode-1 software SPI. Configuration readback was `0xff` with the MISO pull-up
+and `0x00` with the pull-down. The diagnostic correctly classified GPIO13 as
+possibly floating and stopped before trying complementary configuration
+patterns or starting the pinned driver stage.
+
+The software-SPI destructor fallback restored a CS-high frame boundary, then
+requested configuration `0x10` and observed `0x00`. That exact readback
+mismatch made fallback quiescence fail. Neither the software-SPI nor driver
+terminal `0x11` was attempted or observed. There were no driver initialization
+or register transactions, raw RTD codes, `RRTD/RREF` ratios, or RTD fault-bit
+or fault-register samples. This is direct evidence of a failed response and a
+failed software fallback readback; it is not proof that the converter accepted
+a shutdown command or became physically quiescent.
+
+The ordinary signed image was restored with the same helper immediately after
+the run. A bounded monitor showed the ordinary `ControlTask`, simulated chamber
+at 25.0 C, no target, simulated heater at 0.0%, and no diagnostic log. No
+source or production configuration was changed by the diagnostic exercise.
+
+### Corrected connected functional result — 2026-08-24
+
+Preserved log `idf_py_stdout_output_47381` has SHA-256
+`5979dcb174bdc49661c77cb26a67a2ca7db16f3bc42c7daf45a5dbd516d3916d`.
+It records SPI2/GPIO12/11/13/10 at 100 kHz, pull-independent initial
+configuration `0x11`, exact software quiescent `0x00`, idle-bias
+three-wire/50 Hz `0x91`, active `0xD1`, and terminal `0x11`. The pinned-driver
+path then observed initial `0x11`, active `0xD1`, ten raw 8548/8549 samples
+with ratios 0.260864/0.260895 and fault zero, zero transaction errors, zero
+sensor-fault samples, exact terminal `0x11`, and successful descriptor/bus
+shutdown.
+
+With provisional 430.0-ohm Rref and ITS-90, independent conversion
+corroboration gives 112.171631/112.184753 ohm and 31.287679/31.321568 C for
+raw 8548/8549. This checks software interpretation only. It does not identify
+or measure fitted Rref, establish its tolerance, inspect the physical probe,
+or claim calibration/accuracy.
+
+Preserved log `idf_py_stdout_output_46058` has SHA-256
+`f448d05c0dfc35be8dff0aa7e392ec8449b17a369f1ad14e3070f19649a727c3`.
+It records the same successful configuration/shutdown paths but ten raw-zero
+samples with fault status `0x40`, zero transaction errors, and ten sensor-fault
+samples. Because the physical stimulus was not controlled or identified, this
+is evidence that the diagnostic reported a fault, not open/short validation.
+
+### Physical facts and validation still required after runtime activation
 
 | Item | Current finding | Classification |
 |---|---|---|
 | Breakout manufacturer/product/revision/markings | Not recorded | **UNCONFIRMED** |
-| Procurement source and final-product status | Not recorded | **UNCONFIRMED** |
-| Module supply and logic-voltage behavior | Not recorded; chip-level ratings do not prove breakout behavior | **UNCONFIRMED** |
-| RTD element | PT100; nominal driver value 100 Ω at 0 °C. Accuracy class, range, sheath, and cable are not recorded | PT100 choice **CONFIRMED FROM DOCUMENTATION** — user; remaining construction facts **UNCONFIRMED** |
-| Lead configuration | Three-wire | **CONFIRMED FROM DOCUMENTATION** — user selection |
+| Procurement source and final-product status | Probe supplier page is [Sigmanortec SKU 88056](https://sigmanortec.ro/sonda-de-temperatura-pt100-tip-ac-inox-sus304-cablu-fep-ecranat-50200c-clasa-f015); whether the connected unit was inspected against that listing is not recorded. MAX31865 breakout source is not recorded | Supplier listing **CONFIRMED FROM DOCUMENTATION**; physical-unit identity and breakout source **UNCONFIRMED** |
+| Module supply and logic-voltage behavior | Maintainer reports ESP32 3V3 to module VIN; chip-level ratings and this connection report do not prove breakout regulation, level shifting, or actual voltage at the module | Connection **CONFIRMED FROM DOCUMENTATION** — maintainer report; electrical behavior **UNCONFIRMED** |
+| RTD element | Supplier page documents PT100, -50..+200 C assembled range, `F0.15` tolerance, SUS304 4 mm x 100 mm sheath, 1 m shielded FEP cable, 1/4 NPT, and approximately 100 ohm at 0 C / 138.5 ohm at 100 C; exact standard and connected-unit measurements are absent | Listed assembly facts **CONFIRMED FROM DOCUMENTATION** — supplier page; exact standard and physical verification **UNCONFIRMED** |
+| Lead configuration and placement | Maintainer reports three-wire configuration including separate 2/3-wire jumper; red to F+, red to RTD+, blue to RTD-, and RTD- jumpered to F- | **CONFIRMED FROM DOCUMENTATION** — maintainer report; continuity and resistance **UNCONFIRMED** |
 | Fitted reference resistor | Nominal value and tolerance not recorded | **UNCONFIRMED** |
-| SPI and connector pinout | MCU-side assignment is SPI2/GPIO12 SCK/GPIO11 MOSI/GPIO13 MISO/GPIO10 CS; module-side connector order and continuity are not recorded | Assignment **CONFIRMED FROM DOCUMENTATION** — maintainer report; module-side facts **UNCONFIRMED** |
-| ESP32-S3 GPIO assignment | Final soldered production assignment is centralized in `max31865_board_pins.hpp`; the pins do not conflict with the recorded N16R8 PSRAM, strapping, native-USB, UART0, or JTAG restrictions | **CONFIRMED FROM CONFIG** for firmware intent and **CONFIRMED FROM DOCUMENTATION** for the maintainer-reported soldered assignment; no connected exercise |
-| Boot-state behavior and safe power sequencing | Not tested | **UNCONFIRMED** |
+| SPI and connector pinout | MCU-side assignment is SPI2/GPIO12 SCK/GPIO11 MOSI/GPIO13 MISO/GPIO10 CS; first diagnostic followed pulls, later corrected setup produced pull-independent configuration/raw exchanges; module-side continuity is not independently measured | Assignment **CONFIRMED FROM DOCUMENTATION**; functional transactions **CONFIRMED FROM HARDWARE**; continuity **UNCONFIRMED** |
+| ESP32-S3 GPIO assignment | Final soldered production assignment is centralized in `max31865_board_pins.hpp`; the pins do not conflict with recorded N16R8 PSRAM, strapping, native-USB, UART0, or JTAG restrictions; corrected diagnostic exchanged data on that assignment | Firmware intent **CONFIRMED FROM CONFIG**, assignment **CONFIRMED FROM DOCUMENTATION**, transactions **CONFIRMED FROM HARDWARE** |
+| Boot-state behavior and safe power sequencing | Corrected diagnostic booted and both paths read exact terminal `0x11`; ordinary-runtime bootstrap ordering is build validated | Transaction shutdown **CONFIRMED FROM HARDWARE**; safe power sequencing and independent physical quiescence measurement **UNCONFIRMED** |
+| Cable shield termination, continuity, and resistance | Shield termination is not recorded; lead/module continuity and resistance have not been measured | **UNCONFIRMED** |
 | Bias/input-network settling | Module-specific RC/input network is unknown; no extra settling interval has been selected or tested | **UNCONFIRMED** |
 | Accuracy/noise/fault behavior | No connected open/short, ambient, reference-temperature, sustained-run, or heater-noise test | **UNCONFIRMED** |
 
@@ -489,8 +580,12 @@ design evidence:
 The final MAX31865 assignment is now recorded as SPI2/GPIO12/11/13/10 from the
 maintainer-reported soldered board and has been checked against the recorded
 M6A restrictions. Probe and SSR assignments still require their corresponding
-M6B interface facts. The MAX31865 assignment does not complete its remaining
-module, supply, Rref, continuity, or connected-behavior gates.
+M6B interface facts. Supplier probe characteristics and the maintainer-reported
+VIN/jumper/lead placement are recorded, but the first connected run failed at
+pull-following MISO, while the later corrected run established the functional
+response recorded above. The assignment and those documented facts do not complete
+the remaining module, electrical-behavior, Rref, continuity, shield,
+controlled-fault, sustained-runtime, or independent physical-quiescence gates.
 
 ## OTA/history partition note
 
