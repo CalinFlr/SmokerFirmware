@@ -24,13 +24,17 @@ A future item is **not permission to implement it early**.
   module/revision, fitted Rref, continuity, shield, remaining probe-frontend
   facts, address straps, connectors, and probe GPIOs remain open. SSR, power,
   and independent-protection hardware are still blocked on exact parts.
-- **M6B and M7-M10 — remaining controller product baseline:** incomplete. M7,
-  M8, and M9 now have host-tested/cross-buildable MAX31865, PID, and
-  dual-ADS1115 software boundaries. MAX31865 is active as the ordinary chamber
-  source; food probes and heater remain simulated, deterministic PID remains
-  inactive, and remaining physical validation stays gated by M6B. Product V0 cannot be
-  called complete before real sensing/output, food probes, persistence, and
-  recovery are implemented and validated at their appropriate levels.
+- **M7 — real authoritative chamber integration:** complete for its defined
+  software integration and connected ordinary-runtime functional activation.
+  MAX31865 is active as the ordinary chamber source; the short target run is
+  not chamber-hardware or physical-regulation qualification.
+- **M6B and M8-M10 — remaining controller product baseline:** incomplete. M8
+  and M9 have host-tested/cross-buildable PID and dual-ADS1115 software
+  boundaries. Food probes and heater remain simulated, production PID remains
+  inactive, and outstanding physical qualification stays gated by M6B. Product
+  V0 cannot be called complete before real output, food probes, persistence,
+  recovery, and their hardware qualifications are implemented and validated at
+  their appropriate levels.
 - **M11 — local display:** postponed because no display has been purchased.
 - **M12 — Wi-Fi + local API/UI:** implemented for the simulated controller and
   host/cross-build validated; physical radio/provisioning/runtime validation on
@@ -225,11 +229,11 @@ checklist is resolved.
 
 ## M7 — Real authoritative chamber sensor
 
-Status: **Ordinary MAX31865 chamber activation implemented and build-validated;
-connected SPI/configuration/raw/shutdown functional bring-up is T-pass after a
-preserved first floating-MISO failure. Calibration, sustained ordinary runtime,
-controlled faults, response/noise, fitted Rref, and remaining M6B physical
-facts are pending.**
+Status: **Complete for the defined software integration and connected ordinary-
+runtime functional activation. Diagnostic SPI/configuration/raw/shutdown and a
+signed 179-second ordinary run are T-pass after the preserved first floating-
+MISO failure. Remaining chamber-hardware qualification stays under M6B/pre-
+real-heater and release gates.**
 
 The ordinary composition uses MAX31865 as its only authoritative chamber
 source. Simulated chamber infrastructure remains available only to host tests;
@@ -306,13 +310,32 @@ as controlled open/short evidence.
 
 M7 completion is split by evidence class: SPI/configuration/raw/shutdown
 functional bring-up is T-pass; adapter behavior and ordinary activation are
-H-pass/B-pass/Guardrail; calibrated accuracy, response/noise, controlled
-open/short faults and recovery, sustained ordinary runtime, module identity,
-fitted Rref/tolerance, continuity, and independent physical quiescence remain
-HW/T-pending. M7 and the overall chamber portion of M6B therefore remain
-incomplete even though the ordinary authoritative sensor is active.
+H-pass/B-pass/Guardrail. The signed 1,445,888-byte serial target, SHA-256
+`4b1541202eaa7388b79c48f9f615fd7443959b5ad943f12652e3cfa4ea95ffcc`,
+then reported 25.7, 25.7, and 25.8 C at cycles 1, 60, and 180 over approximately
+179 seconds while IDLE with no target and simulated heater 0.0%. These readings
+satisfy the intended three-reading, at-least-120-second functional observation;
+exact cycle 120 was not required. No chamber/control, watchdog, rollback,
+unexpected-reset, or diagnostic failure appeared.
 
-Requires the chamber-sensor/frontend portion of M6B.
+The serial image used blank initial OTA metadata, which ESP-IDF 6.0.2 selected
+directly as `ESP_OTA_IMG_VALID` in the no-factory layout. Its
+`PENDING_VERIFY`/five-cycle criterion is inapplicable and waived; no pending
+state is created or forced. OTA-005 remains unchanged for actual OTA-installed
+pending images, and a future sensor-faulting pending-image test remains separate
+from M7 completion.
+
+M7 is therefore complete for its defined scope. Physical module identity,
+fitted Rref/tolerance, continuity and shield termination, calibrated accuracy,
+controlled open/short behavior and recovery, longer-duration behavior,
+response/noise, heater interference, and independent electrical/thermal safety
+remain M6B/pre-real-heater and release gates. The 179-second observation is not
+sustained-duration qualification or physical temperature regulation: heater/
+SSR and production PID remain inactive. These gates do not block beginning
+ADS1115 integration.
+
+The chamber-sensor/frontend facts sufficient for M7 activation were established
+within the still-incomplete M6B record.
 
 ## M8 — Real SSR heater output + PID control
 
@@ -372,7 +395,9 @@ Electrical work must respect independent hardware safety design.
 Requires M7 plus the SSR/heater and independent-protection portions of M6B.
 
 The inactive software slice does not satisfy those activation prerequisites;
-M6B, M7, M8, and M9 remain incomplete.
+M6B, M8, and M9 remain incomplete. M7's sensor-integration prerequisite is
+satisfied, but real-heater activation remains gated by the outstanding M6B
+hardware qualifications above.
 
 Definition of done:
 

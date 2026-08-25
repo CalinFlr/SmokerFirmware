@@ -205,9 +205,31 @@ Project-owned steady-state read code contains no explicit delay, task creation,
 heap allocation, or `max31865_measure()` call. Host/source/build evidence does
 not prove allocation or worst-case latency inside ESP-IDF/driver/SPI internals.
 Connected diagnostic success also does not establish calibrated accuracy,
-noise, response time, sustained ordinary-runtime behavior, controlled
+noise, response time, longer-duration ordinary-runtime behavior, controlled
 open/short fault handling, module identity, fitted Rref, or physical quiescence
 beyond the observed readbacks.
+
+M7's defined connected ordinary-runtime activation is complete. On 2026-08-25
+the signed 1,445,888-byte serial target, SHA-256
+`4b1541202eaa7388b79c48f9f615fd7443959b5ad943f12652e3cfa4ea95ffcc`,
+ran this exact composition through cycles 1, 60, and 180. Chamber readings were
+25.7, 25.7, and 25.8 C over approximately 179 seconds while IDLE with no target
+and simulated heater 0.0%. The three readings satisfy the intended at-least-
+120-second functional observation; exact cycle 120 was not required. No
+MAX31865, SPI, configuration, chamber-sensor, watchdog, rollback, unexpected-
+reset, or diagnostic failure appeared. This short observation is not
+calibration, controlled-fault, longer-duration, response/noise, heater-
+interference, physical temperature-regulation, or hardware-safety evidence.
+The heater/SSR path and production PID remained inactive.
+
+That serial helper installed all-`0xff` initial OTA metadata in the no-factory
+layout. ESP-IDF 6.0.2 consequently selected `ota_0` directly as
+`ESP_OTA_IMG_VALID`; it did not create `ESP_OTA_IMG_PENDING_VERIFY`. The
+`PENDING_VERIFY`/five-cycle criterion is therefore inapplicable and waived for
+this serial activation only. OTA-005 remains unchanged for an actual OTA-
+installed pending image: five consecutive safe cycles are still mandatory.
+A future sensor-faulting pending-image target test remains separately pending
+but is not an M7 completion criterion.
 
 An additional target-only connected-board diagnostic is compiled only when
 `CONFIG_SMOKER_MAX31865_CONNECTED_DIAGNOSTIC` is explicitly enabled; Kconfig

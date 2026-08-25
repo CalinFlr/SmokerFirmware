@@ -3,8 +3,10 @@
 Status: **M15 software is host/sanitizer and ESP-IDF cross-build validated;
 Blynk Console is configured and KFB003 provisioning, live TLS/status/commands,
 reboot no-replay, firmware check, and remote-error e-mail delivery passed;
-the M7 MAX31865 adapter is active as the ordinary authoritative chamber source
-after host/API validation and connected SPI/configuration/raw/shutdown T-pass;
+M7 is complete for its defined MAX31865 software integration and connected
+ordinary-runtime functional activation after host/API validation, connected
+SPI/configuration/raw/shutdown T-pass, and a signed three-reading 179-second
+ordinary target run;
 the preserved first board diagnostic failed at pull-following MISO before a
 later corrected setup succeeded; the inactive M9 dual-ADS1115 sequencer is
 host-tested and API cross-built while production probe acquisition also remains
@@ -12,7 +14,8 @@ simulated; the first inactive M8 PID slice is host-tested and API cross-built
 while production demand remains deterministic 100/0 and heater output simulated;
 phone push receipt, native mobile layout, exact broker timing,
 deliberate transport loss, the M14 Wi-Fi-loss scenario, M12 radio edge cases,
-and all external-sensor/hardware safety evidence remain pending**
+and all remaining external-sensor qualification/hardware-safety evidence remain
+pending**
 
 This matrix separates implementation status from validation strength. A rule is
 not considered target- or hardware-validated merely because host tests or an
@@ -131,7 +134,7 @@ host test groups are registered in `tests/CMakeLists.txt`.
 | Rule | Milestone/status | Implementation evidence | Test/evidence | Validation |
 |---|---|---|---|---|
 | SF-001 | M4 implemented/P0 guarded | safety evaluated synchronously before sole final heater write | `test_m4_invalid_and_latched_fault`, `test_p0_cr_005_heating_state_invariants`; `tools/check_architecture.py` write-path check | H-pass, B-pass; T-pending |
-| SF-002 | M4 implemented; M7 authoritative adapter active | absent authoritative reading raises ChamberSensorInvalid with no last-known fallback; exact-pinned backend maps not-ready, driver/fault, non-finite, and finite out-of-range outcomes to absence; sensor bootstrap failure continues into an observable first-IDLE-tick FAULT runtime | `test_m4_invalid_and_latched_fault`, `test_max31865_initialization_failure_while_idle_latches_safety_fault`, `test_max31865_valid_then_out_of_range_latches_without_cached_temperature`, `test_max31865_later_driver_failure_latches_without_cached_temperature`; exact ordinary target build and source guardrail | H-pass, B-pass activation, Guardrail; controlled physical faults and recovery HW/T-pending M6B/M7 |
+| SF-002 | M4 implemented; M7 authoritative adapter active | absent authoritative reading raises ChamberSensorInvalid with no last-known fallback; exact-pinned backend maps not-ready, driver/fault, non-finite, and finite out-of-range outcomes to absence; sensor bootstrap failure continues into an observable first-IDLE-tick FAULT runtime | `test_m4_invalid_and_latched_fault`, `test_max31865_initialization_failure_while_idle_latches_safety_fault`, `test_max31865_valid_then_out_of_range_latches_without_cached_temperature`, `test_max31865_later_driver_failure_latches_without_cached_temperature`; exact ordinary target build and source guardrail | H-pass, B-pass activation, Guardrail; M7 functional activation T-pass; controlled physical faults and recovery remain M6B/pre-heater qualification |
 | SF-003 | M4 implemented for configured simulation limit | safety evaluation faults above maximum; target validation rejects above it | `test_m4_over_temperature_and_limits` | H-pass, B-pass; physical value HW-pending |
 | SF-004 | M0/M4 partial | constructor writes OFF; config/sensor/safety validated before final demand | `test_m2`, M4 tests, config-invalid M5 test | H-pass, B-pass; reset reason/recovery Deferred M10 |
 | SF-005 | M5 configured/M6A target-validated | platform runtime subscribes/resets TWDT; defaults set 5 s and panic/reset | target diagnostic deliberately stalled `ControlTask` for 7 s; TWDT identified the task, panicked/reset, and next boot reported watchdog reset reason; normal image restored | B-pass, T-pass |
@@ -155,14 +158,16 @@ download, two-slot boot, mark-valid, forced rollback, and final reinstall.
 | OTA-002 | M13 implemented | immutable snapshot admission plus correlated Prepare rejects RUNNING; dedicated atomic Prepare is ordered before Finish so timeout cannot orphan a delayed reservation; Start is blocked while update active | `test_application_update_permission` Stop/Prepare/Finish FIFO regression, `test_update_coordinator`; source guardrail; stopped-session public-release install on KFB003 | H-pass, B-pass, Guardrail; T-pass stopped-session install path |
 | OTA-003 | M13 implemented | manual image-prefix check is independent of application reservation; real chip ID/project/version admission, HTTPS-only bounded redirects, guarded 4,096-byte request TX buffer, total deadlines, non-RUNNING install permission, and ESP-IDF RSA-3072 signed-update verification are enforced; the public fixed source requires no device credential, while release signing is isolated from ordinary CI and checked against the versioned public key; D051 makes the missing independent reviewer conditional on sole-maintainer repository/tag control | `test_application_update_permission`, `test_semantic_versions_and_descriptors`, `test_image_metadata_and_deadlines`, `test_update_coordinator`; effective-Kconfig/signing/serial source guardrails; anonymous `v0.13.0` download and real GitHub redirect on KFB003 | H-pass, B-pass, Guardrail; T-pass live signed image and redirect; live tamper/timeout not executed |
 | OTA-004 | M13 implemented | exact custom table has `otadata` and equal `ota_0`/`ota_1` 3 MiB slots within confirmed 16 MiB flash; rollback config enabled; signed serial preflight rejects stale configuration, unsigned/build-mismatched apps, and mismatched generated layouts; ordinary unsigned/partial ESP-IDF flash targets fail closed | `test_update_coordinator`; `tools/check_effective_sdkconfig.py`, `tools/flash_signed_firmware.py --check-only`, `tools/check_partitions.py`, blocked ESP-IDF flash-target validation, ESP-IDF partition output; signed KFB003 USB migration, `ota_0` to `ota_1` install, forced rollback, and final reinstall | H-pass, B-pass, Guardrail; T-pass USB migration and both-slot rollback path |
-| OTA-005 | M13 implemented | `PENDING_VERIFY` blocks Start; five safe TWDT-reset cycles mark valid; an observable sensor-bootstrap FAULT, any later fault, timeout, or mark error rolls back through normal validation; runtime-context/ControlTask/OtaTask critical bootstrap failure invokes immediate rollback reboot | `test_application_update_permission`; M7 IDLE initialization-failure host test; `tools/check_architecture.py` pending-bootstrap/source-order guardrails; forced pending-image reset and clean reinstall on KFB003 | H-pass, B-pass, Guardrail; T-pass rollback and five-cycle mark-valid; sensor-faulting pending image target execution pending |
+| OTA-005 | M13 implemented | an actual OTA-installed `PENDING_VERIFY` image blocks Start and requires five safe TWDT-reset cycles before mark-valid; an observable sensor-bootstrap FAULT, any later fault, timeout, or mark error rolls back through normal validation; runtime-context/ControlTask/OtaTask critical bootstrap failure invokes immediate rollback reboot. Blank serial initial metadata instead selects `ota_0` directly as `VALID` under ESP-IDF 6.0.2 and does not weaken this OTA contract | `test_application_update_permission`; M7 IDLE initialization-failure host test; `tools/check_architecture.py` pending-bootstrap/source-order guardrails; forced pending-image reset and clean reinstall on KFB003; reviewed ESP-IDF blank-metadata selection path | H-pass, B-pass, Guardrail; T-pass rollback and five-cycle mark-valid for real pending images; sensor-faulting pending image target execution separately pending |
 | OTA-006 | M13 implemented | static low-priority core-0 OtaTask owns bounded SNTP/HTTPS/flash operations and is outside TWDT; its stack/TCB are internal-DRAM objects, not part of the PSRAM-eligible heap service; ControlTask exchanges ordered bounded atomic signals/snapshots only; unavailable worker reports `FAILED` and rejects work | `test_image_metadata_and_deadlines`, `test_update_coordinator`; `tools/check_architecture.py` task-placement/order/availability checks; live check/install on KFB003 | H-pass, B-pass, Guardrail; T-pass normal install; T-pending Wi-Fi-loss install |
 
 ## Active M7 MAX31865 ordinary-runtime contracts
 
 These checks separate platform behavior/build activation from connected
 functional and still-pending physical evidence. The first connected failure is
-preserved alongside the corrected T-pass. M6B and M7 are not fully complete.
+preserved alongside the corrected diagnostic and ordinary-runtime T-pass. M7
+is complete for its defined integration/activation; M6B and pre-real-heater/
+release hardware qualification remain incomplete.
 
 | Contract | Implementation evidence | Test/evidence | Validation |
 |---|---|---|---|
@@ -172,16 +177,17 @@ preserved alongside the corrected T-pass. M6B and M7 are not fully complete.
 | every current result maps independently | adapter returns `Temperature` only for a current finite in-range backend result; bounds must be finite/ordered, exact endpoints pass, just-outside/raw-zero-like/NaN/infinity fail, initialization/configuration/read/fault failures are absent, and no last value is stored | `test_max31865_temperature_validity_policy_is_finite_ordered_and_inclusive`, `test_max31865_temperature_validity_accepts_boundaries_and_rejects_outside`, `test_max31865_initialization_and_configuration_failures_are_absent`, `test_max31865_read_policy_never_reuses_a_previous_value` | H-pass, B-pass, Guardrail |
 | existing safety remains authoritative and boot faults are observable | bus/pull, descriptor/configuration, or boundary failure leaves the sensor unavailable until reboot but still starts ControlTask/services; the first IDLE tick or a later invalid result raises and latches `ChamberSensorInvalid`, commands heater OFF, and exposes no cached/fabricated temperature; pending OTA cannot count a safe cycle and rolls back on the fault | premature-tick, IDLE initialization-failure, valid-then-out-of-range, and later-driver-failure M7 tests; startup/OTA source guardrail | H-pass, B-pass, Guardrail; boot-fault and controlled fault target injection T-pending |
 | project-owned read code has no explicit wait/allocation | common and target read code contains no explicit delay, task creation, heap allocation, or `max31865_measure()` call | `test_max31865_read_is_observed_allocation_free`; `tools/check_architecture.py` | H-pass ordinary-C++ allocation observation, Guardrail; ESP-IDF/driver allocation and real SPI worst-case blocking unproven |
-| ordinary composition and lifecycle are explicit | `ordinary_runtime.*` target-only RAII initializes bus then checked GPIO13 pull-up before descriptor access; backend rejects a bus it does not own; successful exact `0xD1` write/readback and >=66 ms real-clock wait precede ControlTask; checked terminal `0x11` and descriptor removal precede bus free and floating pull cleanup; composition retains simulated food/heater and deterministic controller, with PID/SSR absent | ordinary target build, ELF/compile-database/source guardrails | B-pass activation, Guardrail; sustained ordinary target runtime T-pending |
+| ordinary composition and lifecycle are explicit | `ordinary_runtime.*` target-only RAII initializes bus then checked GPIO13 pull-up before descriptor access; backend rejects a bus it does not own; successful exact `0xD1` write/readback and >=66 ms real-clock wait precede ControlTask; checked terminal `0x11` and descriptor removal precede bus free and floating pull cleanup; composition retains simulated food/heater and deterministic controller, with PID/SSR absent | ordinary target build, ELF/compile-database/source guardrails; signed serial target cycles 1/60/180 at 25.7/25.7/25.8 C over about 179 seconds with no chamber/control failure | B-pass activation, Guardrail, functional T-pass; longer-duration behavior and physical regulation remain M6B/M8 qualification |
+| serial activation and OTA state are classified correctly | the signed 1,445,888-byte image has SHA-256 `4b1541202eaa7388b79c48f9f615fd7443959b5ad943f12652e3cfa4ea95ffcc`; blank all-`0xff` OTA metadata in the no-factory layout selects `ota_0` directly as `ESP_OTA_IMG_VALID`, while only selected `ESP_OTA_IMG_NEW` transitions to `PENDING_VERIFY`; no pending state is created or forced | preserved artifacts/logs and ESP-IDF 6.0.2 `bootloader_utility.c`; cycles 1/60/180 satisfy the intended at-least-120-second functional observation without exact cycle 120 | T-pass serial activation; five-cycle criterion waived only here; OTA-005 preserved for actual pending images |
 | board diagnostic is isolated, quiescent at ownership release, and evidence-bounded | Kconfig defaults OFF and remains compile-time exclusive; exact software/driver access, bounded ten-sample reporting, and descriptor-before-bus cleanup are unchanged | architecture guardrail; separate ordinary/diagnostic builds and ELF isolation; preserved connected logs/hashes in the connected plan | T-fail preserved for first pull-following run; corrected T-pass for pull independence, `0x00`/`0x91`/`0xD1`, ten raw 8548/8549 zero-fault samples, zero transaction/sensor-fault counts, and both terminal `0x11`; raw-zero/`0x40` is observation only; calibration/controlled fault/physical quiescence HW-pending |
 
 ## Inactive M8 PID software-integration contracts
 
 These checks cover the application controller boundary, a platform PID policy,
 and ESP-IDF 6.0.2 source/API compatibility only. Production still uses the
-deterministic adapter and simulated heater. M6B, M7, M8, and M9 remain
-incomplete; no row is cadence, tuning, SSR, thermal, electrical, or independent
-safety evidence.
+deterministic adapter and simulated heater. M7's sensor-integration prerequisite
+is satisfied; M6B, M8, and M9 remain incomplete, and no row is cadence, tuning,
+SSR, thermal, electrical, or independent-safety evidence.
 
 | Contract | Implementation evidence | Test/evidence | Validation |
 |---|---|---|---|
@@ -295,9 +301,13 @@ The following cannot be closed by M0-M5:
   assignments, and independent safety protection at M6B;
 - at M7, functional pull-independent register response, complementary
   configuration readbacks, exact software/driver terminal `0x11`, and ten raw
-  samples are T-pass after the preserved first failure. Still validate fitted
-  Rref/module identity, continuity, real authoritative timing, calibrated
-  accuracy, noise, controlled faults/recovery, and sustained ordinary behavior;
+  samples are T-pass after the preserved first failure; the signed ordinary
+  target additionally passed cycles 1/60/180 at 25.7/25.7/25.8 C over about
+  179 seconds. This completes M7's defined functional activation. Still qualify
+  fitted Rref/module identity, continuity/shield termination, calibrated
+  accuracy, controlled faults/recovery, longer-duration behavior,
+  response/noise, heater interference, and independent electrical/thermal
+  safety under M6B/pre-real-heater and release gates;
 - bind PID calls/gains to a validated real cadence, select calculation form and
   tuning policy on the real thermal plant, and validate real SSR/heater output,
   independent cutoff, and electrical safe state at M8; the inactive adapter and

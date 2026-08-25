@@ -1231,15 +1231,41 @@ leave the sensor unavailable until reboot while ordinary `ControlTask` and the
 normal observation/connectivity services start. The first IDLE tick publishes
 no chamber value, latches `ChamberSensorInvalid`, exposes `FAULT`, and retains
 OFF. A pending image then rolls back through the normal published-fault policy;
-five safe cycles are still required to mark any image valid. Runtime-context
-allocation and `ControlTask` creation failures remain immediate pending-image
-rollback conditions because the application runtime cannot exist.
+five safe cycles are still required to mark an actual OTA-installed
+`PENDING_VERIFY` image valid. Runtime-context allocation and `ControlTask`
+creation failures remain immediate pending-image rollback conditions because
+the application runtime cannot exist.
 
 The default-OFF connected diagnostic remains isolated and behaviorally
-unchanged. Activation is build-validated software plus functional connected
-bring-up evidence; calibrated accuracy, response, noise, controlled open/short
-fault injection, sustained ordinary-runtime operation, module identity,
-fitted Rref/tolerance, continuity measurements, and independent heater safety
-remain separate hardware gates.
+unchanged. A 2026-08-25 full-serial installation of the 1,445,888-byte signed
+ordinary application, SHA-256
+`4b1541202eaa7388b79c48f9f615fd7443959b5ad943f12652e3cfa4ea95ffcc`,
+then observed this exact composition at cycles 1, 60, and 180. Chamber readings
+were 25.7, 25.7, and 25.8 C over approximately 179 seconds, with no target and
+simulated heater 0.0%. Those three readings satisfy the intended at-least-120-
+second functional observation without requiring exact cycle 120. No
+MAX31865/SPI/configuration/chamber-sensor fault, watchdog, rollback,
+unexpected reset, or diagnostic failure appeared. The operator initiated no
+provisioning, OTA, or network command; automatic saved-Wi-Fi connection and
+configured Blynk attempts remained auxiliary to `ControlTask` and MAX31865
+validation.
+
+The serial helper installed blank all-`0xff` OTA metadata in the no-factory
+layout. Reviewed ESP-IDF 6.0.2 therefore selected `ota_0` directly as
+`ESP_OTA_IMG_VALID`; only an already selected `ESP_OTA_IMG_NEW` entry transitions
+to `ESP_OTA_IMG_PENDING_VERIFY`. The pending/five-cycle acceptance criterion is
+waived only for this serial activation, and no pending state is created or
+forced. OTA-005 remains intact for actual OTA-installed pending images; a
+future sensor-faulting pending-image target test is separate from M7 completion.
+
+M7 is complete for its defined software integration and connected ordinary-
+runtime functional activation. The 179-second observation is not sustained-
+duration qualification and does not demonstrate physical temperature
+regulation because heater/SSR and production PID remain inactive. Physical
+module identity, fitted Rref/tolerance, continuity and shield termination,
+calibrated accuracy, controlled open/short behavior and recovery, longer-
+duration behavior, response/noise, heater interference, and independent
+electrical/thermal safety remain M6B/pre-real-heater and release gates. They do
+not block beginning ADS1115 integration.
 
 Status: Accepted.

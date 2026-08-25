@@ -33,6 +33,11 @@ M6A is complete for the final SuooTci `KFB003` ESP32-S3 N16R8 controller:
 carrier inventory, 16 MiB Quad SPI flash, 8 MiB Octal SPI PSRAM, native USB,
 application runtime, stack use, and task-watchdog reset behavior are recorded
 with product, photograph, and target evidence.
+M7 is complete for its defined MAX31865 software integration and connected
+ordinary-runtime functional activation. The 179-second observation is not
+longer-duration, calibration, fault-injection, response/noise, heater-
+interference, or hardware-safety qualification; those gates remain under M6B
+and pre-real-heater/release work.
 [`docs/HARDWARE.md`](docs/HARDWARE.md) is the canonical, evidence-classified
 component inventory; every future sensor, probe frontend, output, power, and
 independent-safety component must be recorded there before integration.
@@ -216,8 +221,9 @@ waits for that result before claiming that the command was applied. Protected
 cookie writes require an explicit exact Origin, JSON media types and schemas are
 strict, request bodies are limited to 512 bytes, and CORS is not enabled. The
 responsive embedded Fumuri UI uses no remote resources, self-schedules one
-snapshot poll at a time, supports system/light/dark themes, and labels all
-temperature/heater I/O as simulated.
+snapshot poll at a time, supports system/light/dark themes, and accurately
+distinguishes the real chamber source from still-simulated food-probe/heater
+I/O.
 
 ## Durable local history (M14)
 
@@ -526,14 +532,15 @@ functions around selected initialized control-cycle paths. They do not observe
 every possible libc/custom/target allocation mechanism and are not a substitute
 for target heap instrumentation.
 
-## Simulation boundary
+## Hardware boundary
 
-The ESP-IDF image runs only simulated temperature sources and a simulated heater;
-it does not access GPIO or energize an SSR. The `150 C` maximum used by the demo
-and host fixtures is explicitly test input, not a confirmed physical-smoker
-safety limit. The N16R8 storage characteristics and module-level pin
-restrictions are documented from Espressif primary sources, and storage plus
-native USB Serial/JTAG flashing have been confirmed on the target. The final
+The ordinary ESP-IDF image uses the real MAX31865/PT100 chamber source with
+simulated food probes and a simulated heater; it does not energize an SSR. The
+`150 C` maximum used by the demo and host fixtures is explicitly test input,
+not a confirmed physical-smoker safety limit. The N16R8 storage characteristics
+and module-level pin restrictions are documented from Espressif primary
+sources. Storage and native USB Serial/JTAG flashing have been confirmed on the
+target. The final
 SuooTci `KFB003` carrier, exposed headers/restrictions, application runtime,
 ControlTask scheduling/stack use, and TWDT panic/reset behavior are documented
 and target-validated at M6A. Sensor/probe frontends, SSR/power interfaces, final external pin
@@ -636,16 +643,26 @@ chamber path. Its current operational configuration is SPI2 GPIO12/11/13/10,
 supplier-documented inclusive -50..+200 C operational validity range, and a
 checked GPIO13 MISO pull-up. A
 connected diagnostic established pull-independent SPI communication, exact
-configuration/shutdown readbacks, and stable raw observations; this is not
-calibration, accuracy, sustained-runtime, or fault-injection evidence. No physical heater or hardware-safety
-behavior has been tested by the simulation/build/unit tests. The exact-pinned
-`esp-idf-lib/ads111x` 1.1.14 registry driver and its locked ESP-IDF 6 I2C
-support are also present as M9 preparation for the two selected ADS1115s.
-Production still uses simulated probes until both modules, distinct addresses,
-analog frontend, channel map, wiring, and GPIO facts are documented. The signed M13 USB
-migration, credential-free public-release download, both-slot boot, forced
-pending-image rollback, clean reinstall, five-cycle mark-valid, and persistent
-reboot passed on KFB003. The observed simulated heater command remained `0.0%`;
+configuration/shutdown readbacks, and stable raw observations. A subsequent
+signed serial installation (1,445,888 bytes, SHA-256
+`4b1541202eaa7388b79c48f9f615fd7443959b5ad943f12652e3cfa4ea95ffcc`)
+ran the ordinary composition at cycles 1, 60, and 180 with chamber readings
+25.7, 25.7, and 25.8 C over approximately 179 seconds, no chamber/control
+failure, no target, and simulated heater 0.0%. These three readings satisfy the
+intended at-least-120-second functional observation; exact cycle 120 was not
+required. This completes M7's defined integration/activation, but it is not
+calibration, accuracy, controlled-fault, longer-duration, response/noise, or
+heater-interference evidence. No physical heater or hardware-safety behavior
+has been tested by the simulation/build/unit tests or this short observation.
+The exact-pinned `esp-idf-lib/ads111x` 1.1.14 registry driver and its locked
+ESP-IDF 6 I2C support are also present as M9 preparation for the two selected
+ADS1115s. Production still uses simulated probes until both modules, distinct
+addresses, analog frontend, channel map, wiring, and GPIO facts are documented.
+The signed M13 USB migration, credential-free public-release download, boot
+from both slots, forced pending-image rollback, clean reinstall, five-cycle
+validation, and persistent reboot passed on KFB003. The observed simulated
+heater
+command remained `0.0%`;
 this is OTA-path evidence, not a sensor, SSR, thermal, or independent
 hardware-safety test. The signed M14 partition migration, NVS preservation,
 minute-sample history, live target/alarm change, and reboot reconstruction also
@@ -658,11 +675,27 @@ remote-error e-mail delivery, and a Blynk-triggered M13 firmware check passed.
 Phone push receipt, exact broker timing/silence, deliberate transport loss, and
 native mobile-dashboard validation remain open.
 
+That serial M7 installation used blank initial OTA metadata in a no-factory
+layout. ESP-IDF 6.0.2 selected `ota_0` directly as `ESP_OTA_IMG_VALID`, so no
+`PENDING_VERIFY` message was expected and the five-cycle criterion is waived
+for this serial activation. OTA-005 is unchanged for actual OTA-installed
+`PENDING_VERIFY` images, which still require five consecutive safe cycles. The
+operator initiated no provisioning, OTA, or network command during the M7
+observation; ordinary firmware automatically connected to saved Wi-Fi and
+attempted configured Blynk connectivity without affecting `ControlTask` or
+MAX31865 validation.
+
 The controller product baseline cannot be considered complete before M6B and
-the remaining M7-M10 work identifies and validates the remaining real hardware and implements
-persistence/power recovery. M6A is complete for the final SuooTci `KFB003`
-N16R8 board. M6B has functional connected MAX31865 evidence but remains open
-for physical module/Rref identification, continuity and electrical facts, plus
-all other external components/design.
+the remaining M8-M10 work identifies and validates the remaining real hardware
+and implements persistence/power recovery. M6A is complete for the final
+SuooTci `KFB003` N16R8 board. M6B has functional connected MAX31865 evidence
+but remains open for physical module identity, fitted Rref/tolerance,
+continuity and shield
+termination, calibrated accuracy, controlled open/short behavior and recovery,
+longer-duration behavior, response/noise, heater interference, and independent
+electrical/thermal safety, plus all other external components/design. These
+gates do not block beginning ADS1115 integration. M8 and M9 remain incomplete;
+heater/SSR and production PID remain inactive, so no physical temperature
+regulation is claimed.
 Rule-by-rule evidence and deferred work are recorded in
 `docs/TRACEABILITY.md`.

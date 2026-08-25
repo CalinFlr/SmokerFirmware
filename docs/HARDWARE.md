@@ -2,7 +2,7 @@
 
 Status: **M6A complete; M6B external hardware incomplete**
 
-Last evidence update: **2026-08-24**
+Last evidence update: **2026-08-25**
 
 This file is the canonical inventory for every physical component used by the
 product. It is written so that a human or an AI agent can distinguish an
@@ -91,6 +91,12 @@ before either gate is marked complete.
   sensor-fault samples. A separate run observed ten raw-zero samples reporting
   fault `0x40`; that is observed fault reporting, not controlled open/short
   injection.
+- A 2026-08-25 signed serial ordinary-runtime activation observed chamber
+  25.7 C at cycles 1 and 60 and 25.8 C at cycle 180 over approximately 179
+  seconds, while IDLE with no target and simulated heater 0.0%. This completes
+  M7's defined functional activation, not longer-duration, calibration,
+  controlled-fault, response/noise, heater-interference, or physical-regulation
+  qualification.
 - Two ADS1115 converters are selected by the user for the external analog/probe
   path; their exact modules, addresses, channel roles, probe circuits, and
   wiring are not yet documented. The SSR interface is not yet identified.
@@ -105,7 +111,7 @@ before either gate is marked complete.
 | ID | Product role | Selected component | Current classification | Integration status |
 |---|---|---|---|---|
 | `CTRL-001` | Main controller | SuooTci `KFB003` / eMAG `D1T7M22BM`; N16R8 variant reported | Carrier identity **CONFIRMED FROM DOCUMENTATION**; SoC/storage/USB **CONFIRMED FROM HARDWARE** | M6A complete; ordinary runtime uses real chamber input with simulated food/heater I/O |
-| `CHAMBER-001` | Authoritative chamber sensor/frontend | MAX31865 with supplier-documented PT100 probe SKU `88056`, three-wire; final SPI2/GPIO12/11/13/10 wiring assigned; exact physical module and fitted Rref pending | Probe characteristics and assembly **CONFIRMED FROM DOCUMENTATION**; SPI/configuration/raw/shutdown behavior **CONFIRMED FROM HARDWARE**; continuity/module identity/Rref/electrical facts **UNCONFIRMED** | Ordinary production uses MAX31865 with provisional 430-ohm Rref and ITS-90; functional bring-up T-pass and build activation complete; calibration, sustained runtime, controlled faults, and remaining M6B/M7 physical validation pending |
+| `CHAMBER-001` | Authoritative chamber sensor/frontend | MAX31865 with supplier-documented PT100 probe SKU `88056`, three-wire; final SPI2/GPIO12/11/13/10 wiring assigned; exact physical module and fitted Rref pending | Probe characteristics and assembly **CONFIRMED FROM DOCUMENTATION**; SPI/configuration/raw/shutdown and short ordinary-runtime behavior **CONFIRMED FROM HARDWARE**; continuity/module identity/Rref/electrical facts **UNCONFIRMED** | M7 software integration and ordinary functional activation complete; calibration, longer-duration behavior, controlled faults/recovery, and remaining M6B/pre-heater qualification pending |
 | `PROBES-001` | Food-probe analog acquisition | Two ADS1115 converters selected; complete probe frontend and channel map pending | Converter quantity/type **CONFIRMED FROM DOCUMENTATION** — user selection; modules/electrical design **UNCONFIRMED** | Software adapter implemented/inactive; production, wiring, and connected validation blocked at M6B/M9 |
 | `HEATER-001` | SSR/heater power interface | Not selected | **UNCONFIRMED** | Blocked at M6B; no GPIO assigned |
 | `SAFETY-001` | Independent thermal/electrical cutoff | Not designed | **UNCONFIRMED** | Required at M6B |
@@ -167,6 +173,7 @@ Component Registry:
 | Current firmware use | centralized ordinary runtime owns SPI2 bus, checked GPIO13 MISO pull-up, exact-config backend, real monotonic clock, and `Max31865ChamberSensor`; the explicit inclusive -50..+200 C validity policy comes from the supplier's assembled probe range; food probes/heater remain simulated and control deterministic; opt-in diagnostic stays default-OFF and isolated | **CONFIRMED FROM CONFIG** for firmware behavior; range **CONFIRMED FROM DOCUMENTATION** — supplier listing; not calibration |
 | First connected diagnostic | exact opt-in image booted on 2026-08-24; software-SPI configuration readback followed the MISO pulls (`0xff` up, `0x00` down), so complementary patterns, the driver stage, and sampling were not entered; fallback shutdown requested `0x10` and observed `0x00`; ordinary signed firmware was then restored and verified | **CONFIRMED FROM HARDWARE** for this failed observation only; converter communication and physical quiescence remain **UNCONFIRMED** |
 | Corrected connected diagnostic | pull-independent `0x11`; exact software `0x00`/`0x91`/`0xD1` and terminal `0x11`; driver initial `0x11`, active `0xD1`, ten raw 8548/8549 samples with zero fault/transaction/sensor-fault counts, and terminal `0x11` | **CONFIRMED FROM HARDWARE** — functional SPI/raw/shutdown T-pass; not calibration, accuracy, or controlled fault injection |
+| Connected ordinary runtime | signed 1,445,888-byte application, SHA-256 `4b1541202eaa7388b79c48f9f615fd7443959b5ad943f12652e3cfa4ea95ffcc`; cycles 1/60/180 at 25.7/25.7/25.8 C over about 179 seconds; IDLE, no target, simulated heater 0.0%; no chamber/control failure | **CONFIRMED FROM HARDWARE** — M7 functional ordinary-runtime T-pass; not calibration, longer-duration, response/noise, controlled-fault, heater-interference, physical-regulation, or safety qualification |
 
 The active M7 adapter is implemented in `smoker_platform` behind the existing
 `IChamberSensor` port and creates no sensor task. A host-safe seam owns only
@@ -203,6 +210,13 @@ so its first tick publishes the latched FAULT and OFF state. This is build-
 validated activation plus
 functional connected evidence, not calibrated accuracy or a fully validated
 physical conversion policy.
+
+The serial activation used all-`0xff` initial OTA metadata in the no-factory
+layout. ESP-IDF 6.0.2 selected `ota_0` directly as `ESP_OTA_IMG_VALID`, so no
+`PENDING_VERIFY` state or five-cycle message was expected. That criterion is
+waived for this serial activation only; OTA-005 still requires five consecutive
+safe cycles for actual OTA-installed pending images. No pending state was
+created or forced.
 
 The default-OFF diagnostic temporarily enables VBIAS and automatic conversion
 only inside its bounded register/sample procedure. Before software-SPI pins or
@@ -282,7 +296,7 @@ is evidence that the diagnostic reported a fault, not open/short validation.
 | Boot-state behavior and safe power sequencing | Corrected diagnostic booted and both paths read exact terminal `0x11`; ordinary-runtime bootstrap ordering is build validated | Transaction shutdown **CONFIRMED FROM HARDWARE**; safe power sequencing and independent physical quiescence measurement **UNCONFIRMED** |
 | Cable shield termination, continuity, and resistance | Shield termination is not recorded; lead/module continuity and resistance have not been measured | **UNCONFIRMED** |
 | Bias/input-network settling | Module-specific RC/input network is unknown; no extra settling interval has been selected or tested | **UNCONFIRMED** |
-| Accuracy/noise/fault behavior | No connected open/short, ambient, reference-temperature, sustained-run, or heater-noise test | **UNCONFIRMED** |
+| Accuracy/noise/fault behavior | A three-reading 179-second ordinary ambient observation passed; no calibrated reference-temperature, controlled open/short and recovery, longer-duration, response/noise, or heater-interference test exists | Short functional observation **CONFIRMED FROM HARDWARE**; qualification **UNCONFIRMED** |
 
 Primary software references:
 
@@ -583,9 +597,13 @@ M6A restrictions. Probe and SSR assignments still require their corresponding
 M6B interface facts. Supplier probe characteristics and the maintainer-reported
 VIN/jumper/lead placement are recorded, but the first connected run failed at
 pull-following MISO, while the later corrected run established the functional
-response recorded above. The assignment and those documented facts do not complete
-the remaining module, electrical-behavior, Rref, continuity, shield,
-controlled-fault, sustained-runtime, or independent physical-quiescence gates.
+response recorded above. The assignment and those documented facts do not
+complete the remaining module-identity, electrical-behavior, fitted-Rref/tolerance,
+continuity, shield-termination, calibrated-accuracy, controlled-fault/recovery,
+longer-duration, response/noise, heater-interference, or independent electrical/
+thermal-safety gates. Those M6B/pre-real-heater and release gates do not reopen
+the completed M7 functional activation and do not block beginning ADS1115
+integration.
 
 ## OTA/history partition note
 
