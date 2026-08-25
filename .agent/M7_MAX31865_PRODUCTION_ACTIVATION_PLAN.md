@@ -1,7 +1,12 @@
 # M7 MAX31865 Production Activation Plan
 
-Status: **Complete for implementation/build-only activation. Ordinary target
-execution and remaining physical validation are explicitly pending.**
+Status: **Complete for its defined software integration and connected ordinary-
+runtime functional activation. A 2026-08-25 signed serial target run produced
+valid MAX31865 readings through cycle 180. Its blank initial OTA metadata made
+ESP-IDF select `ota_0` directly as `VALID`, so the inapplicable
+`PENDING_VERIFY`/five-cycle criterion is waived for this serial activation.
+Remaining physical qualification is tracked separately and does not reopen
+M7.**
 
 ## Goal
 
@@ -130,11 +135,16 @@ nm/rg source, map, and ELF composition/actuator audits
 
 ## Risks / unresolved items
 
-- Target execution of the ordinary real-sensor composition is still pending.
-- Connected diagnostic functional bring-up is T-pass, but physical Rref value/
-  tolerance, calibration/accuracy, deliberate fault qualification, longer-term
-  timing/settling/noise, sustained behavior, heater interference, and complete
-  M6B electrical/safety work remain HW-pending.
+- Target execution of the ordinary real-sensor composition is T-pass for the
+  three-reading, at-least-120-second functional observation defined below. It
+  is not longer-duration qualification.
+- Connected diagnostic and ordinary-runtime functional bring-up are T-pass,
+  but physical module identity, fitted Rref value/tolerance, continuity and
+  shield termination, calibrated accuracy, controlled open/short behavior and
+  recovery, longer-duration behavior, response/noise, heater interference,
+  and complete independent electrical/thermal safety work remain HW-pending.
+  These are M6B/pre-real-heater and release-qualification gates, not M7
+  completion criteria, and they do not block beginning ADS1115 integration.
 - ESP-IDF/driver/SPI internal allocation and worst-case blocking remain target
   properties; project-owned steady read code must remain wait/task/allocation
   free.
@@ -235,3 +245,95 @@ nm/rg source, map, and ELF composition/actuator audits
   adapter/backend. Only the overlay compile database contains the diagnostic
   source.
 - No board-facing, signing, release, or repository-history action was run.
+
+## Connected ordinary-runtime activation — 2026-08-25
+
+Result: **Functional ordinary-runtime observation passed and completes M7's
+defined connected activation. The serial installation was never a pending
+image, so its `PENDING_VERIFY`/five-cycle criterion is inapplicable and waived.**
+
+- Repository preflight matched committed HEAD
+  `655a4c1ec9532f14817e2943731b9095e347b035` with parent
+  `ab29c2171bcfceb134eed359c13b001a3a49f841`, subject
+  `feat(platform): activate MAX31865 chamber sensing`, a clean index/worktree,
+  and ESP-IDF v6.0.2. The previously verified ordinary simulated recovery set
+  passed the signed helper's explicit `--check-only` preflight before any
+  serial write.
+- A fresh ordinary build used only `sdkconfig.defaults`; the diagnostic option
+  was OFF. Architecture/traceability guardrails, effective configuration,
+  strict C++20 for 32 project sources, partitions, the 75% size limit, all five
+  unsigned-flash target rejections, and ordinary ELF composition checks passed.
+- Fresh artifacts were: unsigned application 1,441,792 bytes,
+  SHA-256 `a47f6396e0861b7d172e27a664372a49d2745e1e46cbbd8ebb61a6f0549e11e3`;
+  ELF 20,386,328 bytes,
+  SHA-256 `d645b12afcf0d87a2878b674b61b04f32877ccedc80931347589b099f59dc72d`;
+  bootloader 21,168 bytes,
+  SHA-256 `5ebae73cb7bbde31a4e6f3df0897ae00fa6a5160c0f74e6131eb59eae261410d`;
+  partition table 3,072 bytes,
+  SHA-256 `fc2d47b7e29632ea559f93af4694854ed158e2fa548dcb09162365f950708432`;
+  and initial OTA metadata 8,192 bytes,
+  SHA-256 `7d2c7ac4888bfd75cd5f56e8d61f69595121183afc81556c876732fd3782c62f`.
+- The existing local signing workflow produced the independently named
+  1,445,888-byte signed application, SHA-256
+  `4b1541202eaa7388b79c48f9f615fd7443959b5ad943f12652e3cfa4ea95ffcc`.
+  It verified against the repository public key and matched the unsigned image
+  byte-for-byte through the unsigned prefix. The pre-existing ignored root
+  binary was restored immediately with its original 266,240-byte size and
+  SHA-256
+  `3f0f7835bca45ab8a5bfdac1da39397ae5823b70393cd41b876ca33e3ea44184`.
+- The signed helper's fresh-image `--check-only` passed, then one authorized
+  flash wrote and hash-verified only the bootloader (`0x00000000` through
+  `0x00005fff` erased), partition table (`0x00008000` through `0x00008fff`),
+  initial OTA metadata (`0x0000f000` through `0x00010fff`), and signed
+  application (`0x00020000` through `0x00180fff`). NVS and history were not
+  erased or written.
+- The immediate timestamped `--no-reset` monitor observed the ordinary mixed
+  composition, `ControlTask` cycle 1 on core 1, chamber 25.7 C, no target, and
+  simulated heater 0.0%. The same no-reset observation later recorded cycle 60
+  at 25.7 C and cycle 180 at 25.8 C. The three finite in-policy readings span
+  179 seconds, with minimum 25.7 C, maximum 25.8 C, and span 0.1 C. They are
+  the intended three-reading, at-least-120-second functional observation;
+  exact cycle 120 was not required. They are plausible room observations, not
+  sustained-duration, calibration, accuracy, response, or noise evidence. No
+  diagnostic output, chamber/SPI/configuration fault, watchdog event,
+  unexpected reset, or rollback appeared. The monitor was decoded with the
+  fresh ELF, while the exact signed application identity is established by the
+  helper's preflight and post-write hash verification; attachment began around
+  application timestamp 1 second and did not preserve the earlier boot-log ELF
+  SHA prefix as a separate runtime observation.
+- Primary monitor logs are
+  `build-m7-production-target-20260825/log/idf_py_stdout_output_99387`
+  (7,197 bytes, SHA-256
+  `c5f6e2076db47f565e7e6b87ad6f8834188430b1d67767634ecfce4e31c6c86c`)
+  and `build-m7-production-target-20260825/log/idf_py_stdout_output_99511`
+  (1,152 bytes, SHA-256
+  `9beb2497d660726124fb54fa56156c8afb1e78690eac87fd41b899532270661b`).
+- The `Pending image marked valid after five safe control cycles` message was
+  correctly absent. The generated `ota_data_initial.bin` contains only `0xff`,
+  and reviewed ESP-IDF 6.0.2 bootloader behavior initializes this blank no-
+  factory dual-OTA layout by selecting `ota_0` directly as
+  `ESP_OTA_IMG_VALID`. Only an already selected entry in
+  `ESP_OTA_IMG_NEW` transitions to `ESP_OTA_IMG_PENDING_VERIFY`. The pending-
+  image criterion is therefore waived only for this serial activation; no
+  pending state was created or forced. OTA-005 remains unchanged: an actual
+  OTA-installed `PENDING_VERIFY` image still requires five consecutive safe
+  cycles. A future sensor-faulting pending-image target test remains separately
+  pending but is not an M7 completion criterion. No intentional reset was
+  performed.
+- Recovery was not needed: the board remained operational and was left on the
+  newly flashed ordinary MAX31865 production image in IDLE with no target and
+  simulated heater OFF. The operator initiated no provisioning, OTA, or
+  network command. Ordinary firmware automatically connected to saved Wi-Fi
+  and attempted configured Blynk connectivity; those auxiliary transport
+  messages did not affect `ControlTask` or MAX31865 validation. No second
+  flash, diagnostic flash, NVS/history erase, session start, wiring
+  manipulation, heater/SSR action, release, tag, commit, or push occurred.
+
+This short run completes M7's defined software integration and ordinary-runtime
+functional activation; it does not qualify the chamber hardware or demonstrate
+physical temperature regulation. Physical module identity, fitted Rref and
+tolerance, continuity and shield termination, calibrated accuracy, controlled
+open/short behavior and recovery, longer-duration behavior, response/noise,
+heater interference, and independent electrical/thermal safety remain explicit
+pre-real-heater/release gates. Heater/SSR and production PID remained inactive.
+Those gates do not block beginning ADS1115 integration.
