@@ -2,7 +2,7 @@
 
 Status: **M6A complete; M6B external hardware incomplete**
 
-Last evidence update: **2026-08-25**
+Last evidence update: **2026-08-26**
 
 This file is the canonical inventory for every physical component used by the
 product. It is written so that a human or an AI agent can distinguish an
@@ -98,8 +98,16 @@ before either gate is marked complete.
   controlled-fault, response/noise, heater-interference, or physical-regulation
   qualification.
 - Two ADS1115 converters are selected by the user for the external analog/probe
-  path; their exact modules, addresses, channel roles, probe circuits, and
-  wiring are not yet documented. The SSR interface is not yet identified.
+  path. One module is currently installed at 3.3 V with GPIO17 SDA, GPIO18 SCL,
+  ADDR to GND (`0x48`), and ALERT/RDY unused. Connected I2C/register/single-shot
+  conversion checks passed on 2026-08-25. The maintainer later reported four
+  divider/filter networks assembled for four user-identified `NTC100` food
+  probes. Only A3 was exercised with an NTC: a failed near-ground run was
+  preserved, then corrected room-condition and uncontrolled-heating response
+  runs passed on 2026-08-26. A0-A2 remain analog-untested. The exact probe R25,
+  Beta/curve, temperature range, connector, calibration, and accuracy remain
+  open. The second ADS1115 is deferred and has no address or wiring assignment.
+  The SSR interface is not yet identified.
 - The project will eventually control an electric smoker heater.
 - Real chamber sensing is active with the evidence limits above. Food-probe
   integration, SSR wiring, independent thermal/electrical protection, current
@@ -112,7 +120,7 @@ before either gate is marked complete.
 |---|---|---|---|---|
 | `CTRL-001` | Main controller | SuooTci `KFB003` / eMAG `D1T7M22BM`; N16R8 variant reported | Carrier identity **CONFIRMED FROM DOCUMENTATION**; SoC/storage/USB **CONFIRMED FROM HARDWARE** | M6A complete; ordinary runtime uses real chamber input with simulated food/heater I/O |
 | `CHAMBER-001` | Authoritative chamber sensor/frontend | MAX31865 with supplier-documented PT100 probe SKU `88056`, three-wire; final SPI2/GPIO12/11/13/10 wiring assigned; exact physical module and fitted Rref pending | Probe characteristics and assembly **CONFIRMED FROM DOCUMENTATION**; SPI/configuration/raw/shutdown and short ordinary-runtime behavior **CONFIRMED FROM HARDWARE**; continuity/module identity/Rref/electrical facts **UNCONFIRMED** | M7 software integration and ordinary functional activation complete; calibration, longer-duration behavior, controlled faults/recovery, and remaining M6B/pre-heater qualification pending |
-| `PROBES-001` | Food-probe analog acquisition | Two ADS1115 converters selected; complete probe frontend and channel map pending | Converter quantity/type **CONFIRMED FROM DOCUMENTATION** — user selection; modules/electrical design **UNCONFIRMED** | Software adapter implemented/inactive; production, wiring, and connected validation blocked at M6B/M9 |
+| `PROBES-001` | Food-probe analog acquisition | Two ADS1115 converters selected; one installed at 3.3 V on GPIO17 SDA/GPIO18 SCL with ADDR=GND (`0x48`); four `NTC100` divider/filter networks reported assembled; second module deferred | Selection/wiring/topology **CONFIRMED FROM DOCUMENTATION** — maintainer report; first-module digital response and connected A3 path response **CONFIRMED FROM HARDWARE**; A0-A2 analog behavior, calibration/accuracy, and second module **UNCONFIRMED** | Software adapter implemented/inactive; only A3 analog-response exercised, production still simulated and physical probe qualification pending at M6B/M9 |
 | `HEATER-001` | SSR/heater power interface | Not selected | **UNCONFIRMED** | Blocked at M6B; no GPIO assigned |
 | `SAFETY-001` | Independent thermal/electrical cutoff | Not designed | **UNCONFIRMED** | Required at M6B |
 | `POWER-001` | Product power supply/rails | Not selected | **UNCONFIRMED** | Blocked at M6B |
@@ -308,11 +316,15 @@ Primary software references:
 
 ### Selection and software boundary
 
-The user selected two ADS1115 converters on 2026-08-18. This fixes the ADC
-type and quantity but does not identify either physical module or complete the
-food-probe frontend. In particular, it does not define which probe/signal uses
-each channel, the probe resistance curve, excitation/bias network, input
-protection/filtering, gain, rate, or voltage-to-temperature calibration.
+The user selected two ADS1115 converters on 2026-08-18. One physical module is
+currently installed for four food probes; the second remains selected for the
+eventual six-probe product capacity but is deferred, not mounted, and not
+assigned. This does not identify either module revision or complete the
+food-probe frontend. The maintainer identifies the intended probes as
+`NTC100`, which is recorded as a probe label rather than silently interpreted
+as an R25 value or a complete resistance-temperature curve. Exact R25,
+Beta/Steinhart-Hart coefficients, temperature range, connector pinout, input
+protection, gain, rate, and voltage-to-temperature calibration remain required.
 
 ESP-IDF 6.0.2 supplies the I2C master driver but no ADS1115 device driver. The
 project therefore uses ESP Component Registry rather than copying a register
@@ -332,11 +344,18 @@ implementation:
 | Configuration/start boundary | mode/mux/gain/rate setters are read-modify-write operations; non-OS `write_conf_bits()` writes explicitly clear OS, while only the OS setter starts a single-shot conversion | **CONFIRMED FROM DOCUMENTATION** — exact pinned 1.1.14 source |
 | Locked I2C behavior | first I/O lazily creates port/device state; mutex and I/O calls use `CONFIG_I2CDEV_TIMEOUT`; retry paths contain `vTaskDelay()` and may recreate device handles | **CONFIRMED FROM DOCUMENTATION** — pinned `i2cdev` 2.1.2 source |
 | Current firmware use | inactive adapter and real API backend compile; production continues to compose `SimulatedFoodProbeSource` | **CONFIRMED FROM CONFIG** — focused host tests and ESP-IDF 6.0.2 cross-build only |
+| Installed module wiring | ESP 3V3 to V, GND to G, GPIO17 to SDA, GPIO18 to SCL, ADDR to GND, ALERT/RDY disconnected; A0..A3 were floating during the 2026-08-25 digital test | **CONFIRMED FROM DOCUMENTATION** — maintainer report; not continuity or rail measurement |
+| Installed module digital response | scan at 100 kHz found `0x48`; ADS1115 reset values were config `0x8583`, low threshold `0x8000`, high threshold `0x7fff`; 16-bit configuration word `0xC383` wrote/read exactly, one A0 single-shot conversion completed, and terminal `0x8583` was restored/read back | **CONFIRMED FROM HARDWARE** — connected target diagnostic on 2026-08-25; A0 was floating, so the raw result is not known-voltage, resistance, temperature, accuracy, or calibration evidence |
+| Reported four-channel topology | Four networks assembled as 3V3 -> nominal 100 kOhm 0.1% -> AINx, with `NTC100` and 100 nF capacitor each from AINx to GND | **CONFIRMED FROM DOCUMENTATION** — maintainer assembly report on 2026-08-26; actual rail/resistor values and A0-A2 analog behavior are unmeasured |
+| Connected A3 response | failed near-ground run preserved; after wiring correction, 20 room-condition and 20 uncontrolled soldering-tool-heating samples showed connected-path response | **CONFIRMED FROM HARDWARE** — maintainer-provided, hash-verified local session transcript; response evidence only, not curve, temperature, calibration, or accuracy |
 
 Two devices can share a bus only when their physical ADDR straps select two
 different addresses from the ADS1115 set `0x48`, `0x49`, `0x4a`, and `0x4b`.
-No address, I2C port, SDA/SCL GPIO, pull-up, speed, channel, gain, or sampling
-choice is made by importing the driver.
+The installed module now uses GPIO17/GPIO18 at 100 kHz and responds at
+`0x48`; the logical ESP-IDF I2C port and production driver configuration are
+still unselected. The second device address is deliberately not assigned until
+it is mounted. Pull-up rail/value, channel gain, data rate, conversion timeout,
+cache age, and calibration are not established by the connected tests.
 
 The inactive M9 adapter remains in `smoker_platform` behind the existing
 `IFoodProbeSource` port and creates no sensor task. One owner sequences both
@@ -374,20 +393,176 @@ nor constructs it. Failures clear only the affected monitoring sample; only
 ambiguous device state adds quarantine, and BR-005/SF-008 keep chamber control
 and heater demand unchanged.
 
-### Physical facts still required before runtime activation or pin assignment
+### Installed module and connected digital result — 2026-08-25
+
+The first module is physically wired as follows. GPIO17 and GPIO18 are exposed
+ordinary header pins on `CTRL-001` and do not overlap the recorded MAX31865,
+Octal-PSRAM, strapping, native-USB, UART0, JTAG, or RGB assignments.
+
+| ESP32-S3 `CTRL-001` | ADS1115 module | Purpose/status |
+|---|---|---|
+| 3V3 | `V` | 3.3 V supply, maintainer-reported connection |
+| GND | `G` | common ground, maintainer-reported connection |
+| GPIO17 | `SDA` | I2C data; connected response passed |
+| GPIO18 | `SCL` | I2C clock; 100 kHz diagnostic passed |
+| GND | `ADDR` | address `0x48`; connected response passed |
+| not connected | `ALERT` / `RDY` | unused in the staged single-shot design |
+| not connected during test | `A0..A3` | four future NTC divider inputs; floating conversion has no physical meaning |
+
+An official ESP-IDF 6.0.2 `i2c_tools` diagnostic configured SDA GPIO17, SCL
+GPIO18, and 100 kHz. It found `0x48` and also an ACK at general-call address
+`0x00`; the latter is compatible with ADS1115 General Call and is not recorded
+as a second device. Register reads matched ADS1115 reset values: configuration
+`0x8583`, low threshold `0x8000`, and high threshold `0x7fff`. The diagnostic
+wrote the 16-bit configuration word `0xC383` for one single-ended A0
+single-shot conversion at the +/-4.096 V range and 128 SPS, read the same word
+back, obtained raw `0x5C71`, then restored and verified terminal `0x8583`.
+Because A0 was floating, neither `0x5C71` nor the test gain/rate is a probe
+reading or a production analog setting.
+
+This closes first-module digital communication only. It does not activate the
+inactive M9 adapter, establish ControlTask timing, prove module identity or
+pull-up values, or validate any voltage, NTC, temperature, disconnect, short,
+noise, accuracy, heater-interference, or sustained-run behavior.
+
+### Connected A3 response evidence — 2026-08-26
+
+The authoritative evidence is the maintainer-provided local session transcript
+with independently verified SHA-256
+`dcfa52e2a352519735c28716afb0eb2c34ed53b1fdd0239664a39b06357c695f`.
+The surviving temporary diagnostic source independently matches SHA-256
+`4cc3eaf477a160aa5e3ebef44a760ef798cbe08fb78e8eee2bd67b5c424a9a68`.
+No transcript, source, log, binary, or temporary artifact is copied into the
+repository.
+
+This was a temporary signed ESP-IDF 6.0.2 application using direct
+`i2c_master` APIs, not `i2c_tools` and not the project backend. It configured
+GPIO17 SDA, GPIO18 SCL, address `0x48`, 100 kHz, direct single-ended A3
+one-shot reads, and internal SDA/SCL pull-ups. It did not exercise
+`Ads1115TargetBackend`, pinned `i2cdev`, the M9 sequencer, production
+composition, ControlTask timing, or sustained acquisition.
+
+The initial 20-sample run began with configuration word `0xF383`. Raw values
+were approximately -4 through -2 and calculated voltage approximately
+-0.0005 through -0.0003 V. This failed observation is consistent with A3 being
+effectively grounded or lacking the high-side divider branch. It is preserved
+as a wiring failure, not hidden as successful NTC response. The maintainer then
+corrected the wiring before the next run.
+
+The corrected room-condition run began with `0x8583` and produced:
+
+| Sample boundary | Raw code | Calculated voltage | Approximate resistance |
+|---|---:|---:|---:|
+| 1 of 20 | 18329 | 2.2911 V | 227.10 kOhm |
+| 20 of 20 | 18040 | 2.2550 V | 215.79 kOhm |
+
+This proves response through the connected A3 divider/jack/probe path only. It
+does not establish probe temperature, R25, Beta, curve identity, calibration,
+or accuracy.
+
+For the next run the maintainer heated the probe using a soldering tool
+(`pistolul de lipit`), not a calibrated bath. It also began with `0x8583`:
+
+| Sample boundary | Raw code | Calculated voltage | Approximate resistance |
+|---|---:|---:|---:|
+| 1 of 20 | 8300 | 1.0375 V | 45.86 kOhm |
+| 20 of 20 | 1174 | 0.1468 V | 4.65 kOhm |
+
+The series is a strong overall decrease consistent with NTC behavior. It is
+not strictly monotonic: raw sample 12 was 1992 and sample 13 was 2029 before
+the overall decrease continued. No temperature, B3950, R25, Beta,
+Steinhart-Hart coefficient, calibration, or accuracy may be inferred.
+
+All resistance values above used nominal values only:
+
+```text
+R_NTC ~= 100 kOhm * Vnode / (3.3 V - Vnode)
+```
+
+Neither the actual 3V3 rail nor the individual 100 kOhm reference resistor was
+measured. Derived resistance is therefore approximate hardware-response
+evidence only.
+
+At the end of each A3 run, the diagnostic wrote `0x8583` and immediately read
+`0x0583`. That result is consistent with OS/busy after starting a one-shot
+conversion; the procedure did not subsequently prove terminal idle readback of
+`0x8583`. Before relying on this A3 procedure again, it must wait/poll for idle
+and verify terminal `0x8583`. This limitation must not be merged with the
+separate 2026-08-25 digital test, which did report verified restoration and
+readback of `0x8583`.
+
+The last known image on the connected board at the end of this separate
+session was the temporary signed A3 diagnostic, not the ordinary production
+firmware. The board is unavailable for this documentation remediation, so no
+serial access, reset, flash, monitor, or restoration is performed. Its last
+known image does not change repository production composition, which still
+uses `SimulatedFoodProbeSource`.
+
+### Reported assembled four-channel `NTC100` analog frontend
+
+The maintainer reports four 100 kOhm, 0.1% fixed resistors and four 100 nF
+ceramic capacitors assembled in the intended per-channel topology. This is an
+assembly report, not measured component/rail evidence or a validated production
+conversion:
+
+```text
+3V3 --- 100 kOhm, 0.1% ---+--- ADS1115 AINx
+                           |
+                           +--- 100 nF ceramic --- GND
+                           |
+                           +--- NTC through jack --- GND
+```
+
+The reported assembly repeats the same independent network for A0, A1, A2,
+and A3:
+
+| Channel | Fixed resistor | Filter capacitor | Intended probe |
+|---|---:|---:|---|
+| A0 | 100 kOhm, 0.1%, from 3V3 to A0 | 100 nF ceramic, A0 to GND | `NTC100` probe 1 |
+| A1 | 100 kOhm, 0.1%, from 3V3 to A1 | 100 nF ceramic, A1 to GND | `NTC100` probe 2 |
+| A2 | 100 kOhm, 0.1%, from 3V3 to A2 | 100 nF ceramic, A2 to GND | `NTC100` probe 3 |
+| A3 | 100 kOhm, 0.1%, from 3V3 to A3 | 100 nF ceramic, A3 to GND | `NTC100` probe 4 |
+
+The fixed resistor and NTC form the resistance-to-voltage divider. The 100 nF
+capacitor is non-polarized and filters noise at the ADC node; it is not a
+series component and does not replace the fixed resistor. Place each fixed
+resistor and capacitor near the ADS1115, keep each AIN node short, and route
+that node plus a ground return to the remote jack. The jack may be mounted on
+the opposite side of the perfboard, but its contact assignment and cable
+shield/ground policy must be documented before production use.
+
+For this reported high-side-resistor topology:
+
+```text
+V_AIN = 3.3 V * R_NTC / (100 kOhm + R_NTC)
+R_NTC = 100 kOhm * V_AIN / (3.3 V - V_AIN)
+```
+
+An open/disconnected probe tends toward 3.3 V and a shorted probe tends toward
+0 V, but validated thresholds need measured rail, ADC error, wiring leakage,
+and connected tests. If later measurement proves `R_NTC = 100 kOhm` at the
+chosen reference temperature, the ideal midpoint is about 1.65 V and the
+midpoint Thevenin resistance is about 50 kOhm. That relatively high source
+impedance and the nominal 5 ms midpoint RC time constant must be included in
+ADS1115 gain/rate/settling/error validation. The resistor value is therefore
+provisional until the probe's actual R25 and curve are measured or documented.
+
+### Physical facts still required before runtime activation
 
 | Item | Current finding | Classification |
 |---|---|---|
-| Module manufacturer/product/revision/markings | Neither module is recorded | **UNCONFIRMED** |
+| Module manufacturer/product/revision/markings | Installed purple module is connected but its manufacturer, exact ADS1115-vs-ADS1015 marking, product, and revision are not recorded; second module is not mounted | **UNCONFIRMED** |
 | Procurement source and final-product status | Not recorded | **UNCONFIRMED** |
-| Supply and logic-voltage behavior | Not recorded; chip ratings do not prove breakout behavior | **UNCONFIRMED** |
-| ADDR straps / I2C addresses | Two distinct addresses required; neither physical strap is recorded | **UNCONFIRMED** |
-| I2C bus | Port, SDA/SCL, pull-up rail/values, bus length, capacitance, and speed not selected | **UNCONFIRMED** |
-| Signal/probe channel map | Purpose of each ADC and AIN0..AIN3 assignment not recorded | **UNCONFIRMED** |
-| Analog frontend | Probe types, bias/excitation, source impedance, filtering, protection, and valid voltage range not recorded | **UNCONFIRMED** |
+| Supply and logic-voltage behavior | Maintainer reports installed module V to ESP 3V3 and G to common ground; no rail measurement, breakout schematic, regulator/level-shifter identity, or current measurement exists | Connection **CONFIRMED FROM DOCUMENTATION**; electrical behavior **UNCONFIRMED** |
+| ADDR straps / I2C addresses | Installed module ADDR is reported tied to GND and responds at `0x48`; second module requires a distinct future address | Installed address/response **CONFIRMED FROM HARDWARE**; physical strap from maintainer report; second address **UNCONFIRMED** |
+| I2C bus | Installed module passed at GPIO17 SDA/GPIO18 SCL and 100 kHz; the A3 diagnostic additionally enabled internal pulls. Logical production port, external pull-up rail/value, bus length/capacitance, and real-service timing remain open | Pins/clock/response **CONFIRMED FROM HARDWARE**; internal-pull policy **CONFIRMED FROM CONFIG** of the temporary source; remaining electrical/runtime facts **UNCONFIRMED** |
+| Signal/probe channel map | Installed-module A0..A3 are reserved in order for probes 1..4; only A3 has analog-response evidence. Final logical IDs/purposes and second-module mapping remain open | Initial reservation **CONFIRMED FROM DOCUMENTATION** — maintainer choice; A0-A2 analog behavior **UNCONFIRMED** |
+| Analog frontend | Four networks are reported assembled as 3V3 -> nominal 100 kOhm 0.1% -> AINx, with `NTC100` and 100 nF ceramic each from AINx to GND. Neither actual 3V3 nor any individual reference resistor was measured; no input-protection design exists | Assembly/topology **CONFIRMED FROM DOCUMENTATION**; connected A3 response **CONFIRMED FROM HARDWARE**; component values, A0-A2 electrical behavior, and calibration **UNCONFIRMED** |
 | Conversion policy | Single-ended/differential mode, gain, data rate, scheduling, and calibration not selected | **UNCONFIRMED** |
-| ESP32-S3 GPIO assignment | None; must be checked against `CTRL-001` restrictions | **UNCONFIRMED** |
-| Connected behavior | No address scan, known-voltage, accuracy, noise, disconnect/short, sustained-run, or heater-interference test | **UNCONFIRMED** |
+| ESP32-S3 GPIO assignment | Installed bus uses GPIO17 SDA and GPIO18 SCL and does not conflict with recorded `CTRL-001` restrictions or MAX31865 GPIO10..13; second module is unassigned | Installed assignment **CONFIRMED FROM DOCUMENTATION** and functional response **CONFIRMED FROM HARDWARE**; second assignment **UNCONFIRMED** |
+| Connected behavior | Installed module passed the separate 2026-08-25 digital checks. On 2026-08-26 the initial A3 run failed near ground; after correction, room and uncontrolled-heating runs showed A3 path response with nominal resistance decreasing overall | Digital and A3 response **CONFIRMED FROM HARDWARE**; A0-A2, known resistance/voltage, disconnect/open/short, settling/noise, accuracy/repeatability, sustained-run, and heater-interference behavior **UNCONFIRMED** |
+| Diagnostic terminal state | 2026-08-25 digital test restored/read `0x8583`. The later A3 diagnostic immediately read `0x0583` after writing `0x8583`, so terminal idle was not proved and needs an idle poll/readback before procedure reuse | Separate digital terminal readback **CONFIRMED FROM HARDWARE**; A3 terminal-idle state **UNCONFIRMED** |
+| Calibration/reference | No ice-bath or simultaneous co-located calibration run occurred. PT100/MAX31865 is only a possible future reference after its own accuracy/reference checks | **UNCONFIRMED** |
 
 Primary software references:
 
@@ -406,7 +581,7 @@ Primary software references:
 | Board definition | No SuooTci, DevKitM, DevKitC, Arduino, or PlatformIO board definition exists; the build does not encode a carrier identity | **CONFIRMED FROM CONFIG** |
 | Project storage selection | 16 MB flash; PSRAM enabled in Octal mode at 80 MHz | **CONFIRMED FROM CONFIG** — `sdkconfig.defaults` |
 | Console | UART0 at 115200 baud is primary; native USB Serial/JTAG is secondary | **CONFIRMED FROM CONFIG** — effective `sdkconfig` |
-| External application GPIO | No sensor, food-probe, SSR/heater, fan, smoke-source, display, or touch GPIO is assigned; production code has no `gpio_*`/`GPIO_NUM_*` use | **CONFIRMED FROM CONFIG** |
+| External application GPIO | Production assigns MAX31865 to GPIO10..13; the installed, still-production-inactive ADS1115 uses GPIO17 SDA/GPIO18 SCL. No SSR/heater, fan, smoke-source, display, or touch GPIO is assigned | MAX31865 **CONFIRMED FROM CONFIG**; ADS1115 assignment **CONFIRMED FROM DOCUMENTATION** with connected digital/A3 response; remaining interfaces **UNCONFIRMED** |
 | Generated PSRAM I/O values | `CONFIG_SPIRAM_CLK_IO=30`, `CONFIG_SPIRAM_CS_IO=26` | **CONFIRMED FROM CONFIG** — internal memory-interface configuration, not smoker peripheral assignments |
 
 ### Direct electronic identity
@@ -593,8 +768,11 @@ design evidence:
 
 The final MAX31865 assignment is now recorded as SPI2/GPIO12/11/13/10 from the
 maintainer-reported soldered board and has been checked against the recorded
-M6A restrictions. Probe and SSR assignments still require their corresponding
-M6B interface facts. Supplier probe characteristics and the maintainer-reported
+M6A restrictions. The first ADS1115 bus assignment GPIO17 SDA/GPIO18 SCL,
+3.3 V, ADDR=GND/`0x48` is also recorded and has passed connected digital and
+A3-path response checks, with the limitations above; A0-A2, the second ADS1115,
+and SSR assignments still require their corresponding M6B interface facts.
+Supplier probe characteristics and the maintainer-reported
 VIN/jumper/lead placement are recorded, but the first connected run failed at
 pull-following MISO, while the later corrected run established the functional
 response recorded above. The assignment and those documented facts do not

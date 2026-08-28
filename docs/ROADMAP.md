@@ -21,8 +21,15 @@ A future item is **not permission to implement it early**.
   placement are recorded. The first connected diagnostic failed because MISO
   followed its pulls; a later corrected run passed pull-independent SPI,
   exact configuration/shutdown readbacks, and ten stable raw samples. The
-  module/revision, fitted Rref, continuity, shield, remaining probe-frontend
-  facts, address straps, connectors, and probe GPIOs remain open. SSR, power,
+  module/revision, fitted Rref, continuity, and shield remain open. The first
+  ADS1115 is now wired at 3.3 V on GPIO17 SDA/GPIO18 SCL with ADDR=GND
+  (`0x48`) and passed a connected register/single-shot digital check. Four
+  `NTC100` channels with nominal 100 kOhm 0.1%/100 nF networks were reported
+  assembled. Only A3 was analog-exercised: a failed near-ground run was
+  preserved, followed by corrected room-condition and uncontrolled-heating
+  response evidence consistent with NTC behavior. A0-A2, exact probe curves,
+  calibration/accuracy, actual rail/resistor values, connectors, external
+  pull-ups, and the second ADS1115 remain open. SSR, power,
   and independent-protection hardware are still blocked on exact parts.
 - **M7 — real authoritative chamber integration:** complete for its defined
   software integration and connected ordinary-runtime functional activation.
@@ -203,9 +210,11 @@ Definition of done:
 
 Status: **In progress — MAX31865/three-wire PT100 functional communication,
 raw sampling, and checked shutdown passed after the preserved first
-floating-MISO failure; two ADS1115 converters are selected; physical module
-identity, complete electrical frontends, and remaining external hardware are
-still incomplete.**
+floating-MISO failure; the installed ADS1115 passed connected digital
+communication and corrected A3-path response on its assigned bus after a
+preserved failed near-ground run. A0-A2, calibration/accuracy, the second
+ADS1115, physical module identity, complete electrical qualification, and
+remaining external hardware are still incomplete.**
 
 External-adapter activation requires documented facts, explicit evidence-class
 boundaries, and a recorded decision. MAX31865 functional evidence permits its
@@ -414,9 +423,11 @@ Definition of done:
 ## M9 — Real food probes
 
 Status: **Software adapter implemented but inactive — host behavior and ESP-IDF
-6.0.2 API compatibility are validated; modules, addresses, channel map, probe
-frontend, runtime service placement, wiring, and connected evidence remain
-blocked on M6B.**
+6.0.2 API compatibility are validated; one installed ADS1115 now has
+GPIO17/18, address `0x48`, connected digital evidence, and corrected
+A3-divider/jack/probe response evidence after a preserved wiring failure. A0-A2,
+module identity, `NTC100` curve/calibration/accuracy, second-device address,
+runtime service placement, and qualification remain blocked on M6B.**
 
 Integrate actual probe frontend/protocol.
 
@@ -425,8 +436,31 @@ Food probes remain monitoring/alarm inputs only.
 Use the exact-pinned ESP Component Registry dependency
 `esp-idf-lib/ads111x` 1.1.14 rather than rewriting its I2C register protocol.
 The upstream example demonstrates two devices on one bus, but its GND/VCC ADDR
-straps are example wiring only. The project must document two distinct physical
-addresses from `0x48..0x4b` before activation.
+straps are example wiring only. The installed project device uses ADDR=GND
+and responded at `0x48`; the project must still document the second distinct
+physical address from `0x49..0x4b` before dual-device activation.
+
+The later A3 evidence was produced by a temporary signed ESP-IDF 6.0.2
+diagnostic using direct `i2c_master` APIs, internal SDA/SCL pull-ups, and
+100 kHz. It did not exercise `Ads1115TargetBackend`, pinned `i2cdev`, this M9
+sequencer, production composition, ControlTask timing, or sustained acquisition.
+The initial 20-sample run started from `0xF383` and stayed near 0 V, consistent
+with A3 being grounded or missing the high-side branch. After correction, a
+room-condition run moved from raw 18329 to 18040 (2.2911 V to 2.2550 V;
+nominally 227.10 kOhm to 215.79 kOhm). Uncontrolled soldering-tool heating
+moved overall from raw 8300 to 1174 (1.0375 V to 0.1468 V; nominally
+45.86 kOhm to 4.65 kOhm), with a small intermediate reversal. These nominal
+resistances used unmeasured 3.3 V and 100 kOhm values and prove only connected
+A3 path response consistent with NTC behavior, not temperature, R25, Beta,
+curve identity, calibration, or accuracy.
+
+The A3 diagnostic wrote `0x8583` at exit and immediately observed `0x0583`,
+consistent with a just-started one-shot conversion rather than proved terminal
+idle. Idle polling and terminal `0x8583` verification are required before the
+procedure is reused. The separate 2026-08-25 digital test did verify terminal
+`0x8583` and remains a distinct result. The last known board image after the A3
+session was the temporary diagnostic; repository production composition still
+uses `SimulatedFoodProbeSource`.
 
 The inactive adapter stays in `smoker_platform` behind `IFoodProbeSource`,
 without a separate sensor task. One acquisition owner retains independent
@@ -469,11 +503,18 @@ constant.
 
 Requires the food-probe frontend/protocol portion of M6B.
 
-M9 remains incomplete until the physical modules, bus/address/channel/front-end
-facts and device-specific capacity are recorded, a service placement is proven
-against the real ControlTask budget, and known-voltage, calibration, accuracy,
-noise, disconnect/short, sustained-run, and heater-interference behavior are
-validated on the target.
+M9 remains incomplete until module manufacturer/revision and external pull-up
+rail/value are recorded; actual rail and individual reference resistors are
+measured; R25 and a documented/fitted curve are established from stable,
+co-located points against a separately validated reference; A0-A2 and the
+second module/address are exercised; and device-specific capacity is confirmed.
+Known-resistance/known-voltage, disconnect/open/short, noise, settling,
+accuracy, repeatability, sustained-operation, and heater-interference tests
+also remain required. PT100/MAX31865 is only a possible future reference after
+its own accuracy/reference checks; no ice-bath or simultaneous calibration run
+occurred in the A3 session. Project backend/sequencer integration, production
+activation, and service placement proven against the real ControlTask budget
+remain separate gates.
 
 ## M10 — Persistence + power recovery
 

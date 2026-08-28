@@ -1113,6 +1113,57 @@ descriptor and creates a mutex; project configuration replaces that clock and
 sets the explicit pull-up policy before the first I2C transaction. Production
 does not call `i2cdev_init()` or instantiate the backend.
 
+Subsequent staged hardware evidence does not activate that backend. On
+2026-08-25 the first of the two selected modules was wired at 3.3 V with
+GPIO17 SDA, GPIO18 SCL, ADDR to GND (`0x48`), and ALERT/RDY disconnected. A
+100 kHz ESP-IDF 6.0.2 diagnostic read the ADS1115 reset registers, performed an
+exact 16-bit configuration-word write/readback, completed one floating-A0
+single-shot conversion, and restored and read back terminal `0x8583`. This is
+connected digital communication evidence only.
+
+On 2026-08-26 the maintainer reported all four intended networks assembled as
+3V3 through nominal 100 kOhm 0.1% to AINx, with the `NTC100` and 100 nF
+capacitor each connected from AINx to GND. Only A3 was exercised with an NTC;
+A0-A2 have no analog-validation evidence. A temporary signed ESP-IDF 6.0.2
+diagnostic used direct `i2c_master` APIs, internal SDA/SCL pull-ups, and the
+same GPIO17/GPIO18, `0x48`, 100 kHz bus. It did not use the pinned driver,
+`Ads1115TargetBackend`, the M9 sequencer, production composition, or
+ControlTask.
+
+The first A3 run preserved a real wiring failure: configuration before test
+was `0xF383`, raw codes stayed approximately -4 through -2, and calculated
+voltage stayed approximately -0.0005 through -0.0003 V. This was consistent
+with an effectively grounded A3 node or a missing high-side branch. After the
+wiring was corrected, a 20-sample room-condition run began from `0x8583` and
+moved from raw 18329 to 18040, 2.2911 V to 2.2550 V, and nominally calculated
+227.10 kOhm to 215.79 kOhm. An uncontrolled soldering-tool heating run also
+began from `0x8583` and moved overall from raw 8300 to 1174, 1.0375 V to
+0.1468 V, and nominally calculated 45.86 kOhm to 4.65 kOhm. A small
+intermediate reversal means the heating series is not strictly monotonic; its
+strong overall decrease is only consistent with NTC behavior.
+
+The nominal calculation `R_ntc ~= 100 kOhm * Vnode / (3.3 V - Vnode)` used
+neither a measured rail nor a measured individual reference resistor. These
+runs therefore prove response through the connected A3 divider/jack/probe path
+only, not temperature, R25, Beta/curve, fitted coefficients, calibration, or
+accuracy. The A3 diagnostic wrote `0x8583` at exit and immediately read
+`0x0583`, consistent with OS/busy after starting a one-shot conversion; it did
+not prove later terminal-idle `0x8583`. A future use of that procedure must poll
+for idle and verify the terminal word. This is separate from the 2026-08-25
+digital test's verified restoration/readback. The last known board image at the
+end of the separate A3 session was the temporary diagnostic, not ordinary
+production firmware; this board state does not alter repository composition.
+
+Production still uses simulated food probes. Module identity and external
+pull-up rail/value, actual rail/reference-resistor measurements, A0-A2,
+known-resistance/known-voltage, disconnect/open/short, settling/noise,
+accuracy/repeatability, sustained and heater-interference tests, a separately
+validated calibration reference and stable co-located points, second-module
+address, project backend/sequencer integration, and ControlTask service
+placement remain activation gates. PT100/MAX31865 may be considered only as a
+future reference after its own reference/accuracy checks; no simultaneous or
+ice-bath calibration run occurred in the A3 session.
+
 TI specifies conversion time as `1 / DR` with +/-10% data-rate variation and
 approximately 25 us single-shot power-up. The monotonic stuck deadline remains
 mandatory configuration and must exceed the documented worst conversion
