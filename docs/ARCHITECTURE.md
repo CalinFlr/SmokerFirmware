@@ -407,6 +407,40 @@ backend replaces that clock and applies the required pull-up policy before
 `ads111x_set_mode()` performs the first I2C transaction. Production does not
 call `i2cdev_init()` or construct this backend.
 
+Connected evidence does not change that composition. One ADS1115 is currently
+installed at 3.3 V on GPIO17 SDA/GPIO18 SCL, ADDR tied to GND (`0x48`),
+ALERT/RDY disconnected, and 100 kHz; the second selected module is deferred.
+Four networks were reported assembled as 3V3 through nominal 100 kOhm 0.1% to
+each AIN node, with the intended NTC and 100 nF capacitor branches from that
+node to GND, but only A3 was physically exercised with an NTC. A0-A2 have no
+analog-response evidence.
+
+The A3 runs used a temporary signed ESP-IDF 6.0.2 diagnostic built directly on
+`i2c_master` APIs with internal SDA/SCL pull-ups enabled. They did not exercise
+`Ads1115TargetBackend`, pinned `i2cdev`, the staged M9 sequencer, production
+composition, ControlTask timing, or sustained acquisition. The first run began
+from configuration word `0xF383` and stayed near zero (raw approximately -4
+through -2), consistent with A3 being effectively grounded or missing its
+high-side divider branch. After the wiring was corrected, a 20-sample room-
+condition run began from `0x8583` and moved from raw 18329 to 18040, 2.2911 V
+to 2.2550 V, and nominally calculated 227.10 kOhm to 215.79 kOhm. An
+uncontrolled soldering-tool heating run began from `0x8583` and moved overall
+from raw 8300 to 1174, 1.0375 V to 0.1468 V, and nominally calculated
+45.86 kOhm to 4.65 kOhm. The latter had a small intermediate reversal and is
+only a strong overall decrease consistent with NTC behavior.
+
+Those resistance values use nominal 3.3 V and 100 kOhm values; neither the rail
+nor the individual resistor was measured. The runs establish response only
+through the connected A3 divider/jack/probe path, not temperature, R25, Beta,
+curve identity, calibration, or accuracy. At diagnostic exit, `0x8583` was
+written and immediately read as `0x0583`, consistent with OS/busy after a
+one-shot start; terminal idle `0x8583` was not subsequently proved. That
+procedure requires a later idle poll/readback before reuse. This limitation is
+separate from the 2026-08-25 digital test which did verify terminal `0x8583`.
+The last known board image after the A3 session was this temporary diagnostic,
+not the ordinary firmware; repository production composition nevertheless
+remains unchanged.
+
 The TI Rev. E datasheet states conversion time is `1 / DR` and specifies
 data-rate variation of +/-10%; the software validates the explicit stuck
 deadline against that conversion-period floor. The approximately 25 us

@@ -656,8 +656,21 @@ heater-interference evidence. No physical heater or hardware-safety behavior
 has been tested by the simulation/build/unit tests or this short observation.
 The exact-pinned `esp-idf-lib/ads111x` 1.1.14 registry driver and its locked
 ESP-IDF 6 I2C support are also present as M9 preparation for the two selected
-ADS1115s. Production still uses simulated probes until both modules, distinct
-addresses, analog frontend, channel map, wiring, and GPIO facts are documented.
+ADS1115s. One module is currently installed at `0x48` over GPIO17 SDA and
+GPIO18 SCL at 100 kHz; the second is deferred. Four `NTC100` divider/filter
+networks were reported assembled with nominal 100 kOhm 0.1% high-side
+resistors and 100 nF node-to-ground capacitors. Only A3 was exercised with an
+NTC: the first near-zero run preserved a wiring failure, then a corrected
+room-condition run and an uncontrolled soldering-tool heating run proved a
+strong connected-path response consistent with NTC behavior. They did not
+establish temperature, R25, Beta/curve, calibration, or accuracy; A0-A2 remain
+analog-untested. The temporary direct-`i2c_master` diagnostic did not exercise
+the project backend/sequencer or ControlTask, and its immediate final
+`0x0583` readback did not prove terminal idle after writing `0x8583`. The last
+known board image after that separate session is the temporary diagnostic, not
+ordinary firmware. Production still uses simulated probes until all remaining
+module/pull-up/measurement/calibration/channel/timing and physical-
+qualification gates are completed.
 The signed M13 USB migration, credential-free public-release download, boot
 from both slots, forced pending-image rollback, clean reinstall, five-cycle
 validation, and persistent reboot passed on KFB003. The observed simulated

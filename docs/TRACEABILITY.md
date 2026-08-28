@@ -9,8 +9,13 @@ SPI/configuration/raw/shutdown T-pass, and a signed three-reading 179-second
 ordinary target run;
 the preserved first board diagnostic failed at pull-following MISO before a
 later corrected setup succeeded; the inactive M9 dual-ADS1115 sequencer is
-host-tested and API cross-built while production probe acquisition also remains
-simulated; the first inactive M8 PID slice is host-tested and API cross-built
+host-tested and API cross-built. One installed device passed connected
+GPIO17/18, `0x48`, register, and floating-A0 single-shot checks; a later
+temporary direct-I2C diagnostic preserved an initial A3 wiring failure and then
+showed corrected room/heating response through A3 only. Production probe
+acquisition remains simulated, A0-A2 analog behavior and calibration remain
+pending, and the last known board image is the temporary A3 diagnostic;
+the first inactive M8 PID slice is host-tested and API cross-built
 while production demand remains deterministic 100/0 and heater output simulated;
 phone push receipt, native mobile layout, exact broker timing,
 deliberate transport loss, the M14 Wi-Fi-loss scenario, M12 radio edge cases,
@@ -204,14 +209,19 @@ SSR, thermal, electrical, or independent-safety evidence.
 
 ## Inactive M9 dual-ADS1115 software-integration contracts
 
-These checks cover one platform software sequencer and ESP-IDF 6.0.2 source/API
-compatibility only. M6B and M9 remain incomplete, production uses simulated
-food probes, and no row is connected I2C, calibration, sensor, or electrical
-evidence.
+These checks cover one platform software sequencer, ESP-IDF 6.0.2 source/API
+compatibility, the separately authorized digital bring-up of the installed
+physical ADC, and later response evidence through A3 only. M6B and M9 remain
+incomplete and production uses simulated food probes. The connected rows keep
+digital, A3-response, terminal-state, and production-integration evidence
+separate; none is calibration or accuracy evidence.
 
 | Contract | Implementation evidence | Test/evidence | Validation |
 |---|---|---|---|
 | all unknown physical values stay explicit | exactly two device records require port, SDA/SCL, clock, pull-up policy, and address; channels require probe/device map, mux, gain, and rate; timeout and sample maximum age have no defaults; raw conversion requires an injected calibration/validity policy | `test_ads1115_invalid_incomplete_configurations_are_rejected`; source guardrail | H-pass, B-pass, Guardrail; physical values/calibration HW-pending |
+| installed ADS1115 responds digitally | maintainer-reported 3.3 V/GND, GPIO17 SDA, GPIO18 SCL, ADDR=GND (`0x48`), ALERT/RDY open; 100 kHz diagnostic read reset config/thresholds, wrote/read the 16-bit configuration word `0xC383`, completed one A0 single shot, and restored/read terminal `0x8583`; A0..A3 were floating | connected ESP-IDF 6.0.2 `i2c_tools` diagnostic on 2026-08-25 | T-pass digital communication only; module identity, pull-ups, known-voltage, `NTC100`, calibration, accuracy, disconnect/short, sustained behavior, and production activation pending |
+| A3 connected path responds after a preserved wiring failure | four nominal 100 kOhm 0.1%/100 nF high-side-divider networks were reported assembled, but only A3 was exercised with an NTC. Initial `0xF383` run stayed raw about -4..-2 and -0.0005..-0.0003 V; after correction, 20 room samples moved 18329 -> 18040, 2.2911 -> 2.2550 V, and nominally 227.10 -> 215.79 kOhm; uncontrolled soldering-tool heating moved overall 8300 -> 1174, 1.0375 -> 0.1468 V, and nominally 45.86 -> 4.65 kOhm with a small reversal | maintainer-provided, hash-verified local session transcript and hash-verified temporary source; direct ESP-IDF `i2c_master` diagnostic with internal pulls | Initial T-fail wiring observation preserved; corrected A3 response T-pass only. A0-A2, actual rail/resistor values, temperature, R25/Beta/curve, calibration, and accuracy remain pending |
+| A3 procedure and production boundaries remain explicit | temporary diagnostic did not use `Ads1115TargetBackend`, pinned `i2cdev`, M9 sequencer, production composition, ControlTask timing, or sustained acquisition. It wrote `0x8583` then immediately read `0x0583`, so terminal idle was not proved; the last known board image is that diagnostic. Ordinary source still composes `SimulatedFoodProbeSource` | hash-verified transcript and temporary-source inspection plus production composition guardrail | Guardrail; A3 idle poll/readback remediation, backend/sequencer integration, timing, production activation, and ordinary-image restoration remain pending; separate 2026-08-25 terminal `0x8583` T-pass retained |
 | initial use and recovery prove each ADC idle | both devices begin unsynchronized; only `busy=false` synchronizes one device, discards any stale result, and returns without same-step configure/start/read; busy/error devices remain quarantined while round-robin progress reaches the other ADC | `test_ads1115_both_devices_require_initial_idle_synchronization`, `test_ads1115_initial_stale_result_is_discarded_before_later_restart`, `test_ads1115_recovery_requires_idle_and_never_reads_or_restarts_same_step`, `test_ads1115_quarantined_device_does_not_block_the_other_adc` | H-pass, B-pass, Guardrail; externally powered reset behavior target-pending |
 | one owner preserves latched channel provenance | the fake and sequencer distinguish configured from in-flight mux/gain/rate/probe state; later configuration or a start while busy cannot replace in-flight provenance; timeout/ambiguous-start/busy-error results are never read, reconfigured over, or attributed to the next channel; the fixture includes consecutive device-0 channels | `test_ads1115_fake_latches_in_flight_provenance_across_reconfiguration`, `test_ads1115_timed_out_conversion_cannot_be_reconfigured_or_misattributed`, `test_ads1115_ambiguously_failed_start_is_quarantined_and_discarded`, `test_ads1115_busy_observation_error_uses_the_same_quarantine_boundary` | H-pass, B-pass, Guardrail |
 | readiness precedes timeout without synchronous wait | each active step observes busy once before the deadline; ready at or after the deadline is accepted because polling does not reveal completion time; still busy at/after it clears only the active sample and quarantines that ADC without `get_value`; the configured deadline still exceeds the TI `1 / (0.9 * DR)` floor | `test_ads1115_ready_exactly_at_deadline_is_accepted`, `test_ads1115_ready_after_deadline_is_accepted`, `test_ads1115_busy_exactly_at_deadline_quarantines_without_read`; source guardrail | H-pass, B-pass; real service cadence/I2C timing target-pending |
@@ -312,6 +322,18 @@ The following cannot be closed by M0-M5:
   tuning policy on the real thermal plant, and validate real SSR/heater output,
   independent cutoff, and electrical safe state at M8; the inactive adapter and
   simulated tests close none of those gates;
+- at M9, retain the installed-device digital T-pass and corrected A3-only
+  response evidence without extending it to A0-A2, temperature, curve,
+  calibration, or accuracy. Still identify module revision and external
+  pull-ups; measure the rail and each reference resistor; establish R25 and a
+  curve from stable co-located points against a separately validated reference;
+  exercise A0-A2, the second ADC, known resistance/voltage, disconnect/open/
+  short, settling/noise, accuracy/repeatability, sustained operation, and heater
+  interference; and validate project backend/sequencer integration plus
+  ControlTask timing before production activation. PT100/MAX31865 is only a
+  possible future reference after its own checks. No ice-bath/simultaneous
+  calibration occurred, the A3 procedure still needs terminal-idle `0x8583`
+  verification, and the last known board image is the temporary diagnostic;
 - validate persistence, reset reason, and `resumeAfterPowerFailure` at M10;
 - validate M12 AP/STA provisioning, automatic captive opening, real scan and
   hidden-SSID/wrong-password fallback, mDNS, authentication, Wi-Fi-loss
