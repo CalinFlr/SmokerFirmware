@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <optional>
 #include <span>
+#include <utility>
 #include <vector>
 
 namespace smoker::platform {
@@ -206,6 +207,71 @@ private:
     std::uint32_t consecutive_write_errors_{0U};
     bool degraded_{false};
     bool last_query_failed_{false};
+};
+
+enum class HistoryWriteCycleResult : std::uint8_t {
+    NoObservation,
+    Written,
+    RetryLifecycle,
+    DroppedOrdinary,
+    TerminalFailStop,
+    Stopped,
+};
+
+struct HistoryWriteAttemptResult final {
+    bool written{false};
+    HistoryStorageState storage_state{HistoryStorageState::Ready};
+};
+
+// HistoryTask-only policy. It keeps failed lifecycle observations ahead of
+// later mailbox entries, but only while CircularHistoryLog remains retryable.
+// Once the log reports Failed, process() permanently refuses to invoke the
+// supplied writer.
+class HistoryWritePolicy final {
+public:
+    [[nodiscard]] bool terminal() const noexcept { return terminal_; }
+    [[nodiscard]] bool has_pending_lifecycle() const noexcept
+    {
+        return pending_lifecycle_.has_value();
+    }
+
+    template <typename Writer>
+    [[nodiscard]] HistoryWriteCycleResult process(
+        std::optional<HistoryObservation> observation, Writer&& writer
+    )
+    {
+        if (terminal_) return HistoryWriteCycleResult::Stopped;
+
+        HistoryObservation* selected = nullptr;
+        if (pending_lifecycle_) {
+            selected = &*pending_lifecycle_;
+        } else if (observation) {
+            selected = &*observation;
+        } else {
+            return HistoryWriteCycleResult::NoObservation;
+        }
+
+        const auto attempt = std::forward<Writer>(writer)(*selected);
+        if (attempt.written) {
+            pending_lifecycle_.reset();
+            return HistoryWriteCycleResult::Written;
+        }
+        if (attempt.storage_state == HistoryStorageState::Failed) {
+            pending_lifecycle_.reset();
+            terminal_ = true;
+            return HistoryWriteCycleResult::TerminalFailStop;
+        }
+        if (selected->kind == HistoryObservationKind::Start
+            || selected->kind == HistoryObservationKind::End) {
+            if (!pending_lifecycle_) pending_lifecycle_ = std::move(*selected);
+            return HistoryWriteCycleResult::RetryLifecycle;
+        }
+        return HistoryWriteCycleResult::DroppedOrdinary;
+    }
+
+private:
+    std::optional<HistoryObservation> pending_lifecycle_;
+    bool terminal_{false};
 };
 
 } // namespace smoker::platform
