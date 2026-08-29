@@ -51,7 +51,7 @@ dependencies:
       require: private
       version: '*'
     source:
-      registry_url: https://components.espressif.com
+      registry_url: https://components.espressif.com/
       type: service
     targets:
     - esp32
@@ -143,12 +143,13 @@ dependencies:
     version: 6.0.2
 direct_dependencies:
 - esp-idf-lib/ads111x
+- esp-idf-lib/i2cdev
 - esp-idf-lib/max31865
 - espressif/cjson
 - espressif/mdns
 - espressif/mqtt
 - espressif/pid_ctrl
 - idf
-manifest_hash: 1e73a5fd7f6ecaf32296f78dd7c1d521122cc3022e659a482a9f8892cbf92f6c
+manifest_hash: 67f30d8c622f5553143caba2cc236218346712813594ffabecb1d194e62d3a17
 target: esp32s3
 version: 3.0.0

@@ -312,7 +312,7 @@ Primary software references:
 - [Versioned upstream source](https://github.com/esp-idf-lib/max31865/tree/79566bd59420b03ab999c124f012a93a63f3a7db)
 - [Analog Devices MAX31865 datasheet](https://www.analog.com/media/en/technical-documentation/data-sheets/max31865.pdf) — chip-level authority only; not a schematic for the unknown breakout
 
-## `PROBES-001` — dual ADS1115 acquisition dossier
+## `PROBES-001` — staged ADS1115 acquisition dossier
 
 ### Selection and software boundary
 
@@ -335,12 +335,14 @@ implementation:
 | Driver | `esp-idf-lib/ads111x` 1.1.14, BSD-3 | **CONFIRMED FROM CONFIG** — exact manifest pin |
 | Registry identity | component hash `fd18497adfb7210d750188986bc7cebc048db36abb64fdbe7216d4536083c4a2` | **CONFIRMED FROM CONFIG** — `dependencies.lock` |
 | Upstream source | release commit `9eb6f607662518f1bdd3a3b88629db720b765b8e`; explicitly targets `esp32s3` | **CONFIRMED FROM DOCUMENTATION** — registry metadata and versioned source |
-| Locked support components | `esp-idf-lib/i2cdev` 2.1.2 (`ad8981cc64533dcaced5107d72e42bcebe79345e194e82795792af531b300ce3`) and `esp-idf-lib/esp_idf_lib_helpers` 1.4.0 (`689853bb8993434f9556af0f2816e808bf77b5d22100144b21f3519993daf237`) | **CONFIRMED FROM CONFIG** — resolved lockfile closure |
+| Locked support components | direct exact `esp-idf-lib/i2cdev` 2.1.2 (`ad8981cc64533dcaced5107d72e42bcebe79345e194e82795792af531b300ce3`) and resolved `esp-idf-lib/esp_idf_lib_helpers` 1.4.0 (`689853bb8993434f9556af0f2816e808bf77b5d22100144b21f3519993daf237`) | **CONFIRMED FROM CONFIG** — manifest and lockfile closure |
 | Driver capabilities | ADS1115 input mux, programmable gain, 8..860 SPS data rate, single-shot/continuous modes, explicit start/busy/value operations, thresholds, and comparator configuration | **CONFIRMED FROM DOCUMENTATION** — versioned public header/source |
 | Two-device support | Upstream versioned example constructs two descriptors on one I2C bus with distinct ADDR straps | **CONFIRMED FROM DOCUMENTATION** — example; its GND/VCC choices are not project pin assignments |
 | ESP-IDF 6 build path | locked `i2cdev` selects ESP-IDF 6's new `i2c_master` driver | **CONFIRMED FROM CONFIG** — fresh ESP32-S3 configure/build output |
 | Conversion timing | Conversion time is `1 / DR`; nominal data rates vary by +/-10%; single-shot power-up is approximately 25 us | **CONFIRMED FROM DOCUMENTATION** — TI ADS1115 Rev. E sections 5.5, 7.3.6, and 7.4.2.1 |
 | Descriptor initialization | `ads111x_init_desc()` writes a driver-owned 1 MHz clock into `i2c_dev_t` before creating its mutex | **CONFIRMED FROM DOCUMENTATION** — pinned 1.1.14 source |
+| Subsystem lifecycle | `i2cdev_init()` is required before device initialization/first I2C setup; `i2cdev_done()` deletes port locks but does not reset `i2cdev_init()`'s function-local initialized flag; owner member state cannot enforce process-wide exclusivity | **CONFIRMED FROM DOCUMENTATION** — pinned 2.1.2 header/source; activation requires one owner/initialization per boot and same-boot restart after release is unsupported |
+| Cleanup observability | `ads111x_free_desc() == ESP_OK` means its nested `i2c_dev_delete_mutex()` returned `ESP_OK`; that function reports port-lock timeout but logs and swallows nested device/bus deletion errors while clearing handles. Later `i2cdev_done()` cannot necessarily rediscover them | **CONFIRMED FROM DOCUMENTATION** — pinned 1.1.14/2.1.2 source; API-return success does not prove every nested teardown operation or physical/driver quiescence |
 | Configuration/start boundary | mode/mux/gain/rate setters are read-modify-write operations; non-OS `write_conf_bits()` writes explicitly clear OS, while only the OS setter starts a single-shot conversion | **CONFIRMED FROM DOCUMENTATION** — exact pinned 1.1.14 source |
 | Locked I2C behavior | first I/O lazily creates port/device state; mutex and I/O calls use `CONFIG_I2CDEV_TIMEOUT`; retry paths contain `vTaskDelay()` and may recreate device handles | **CONFIRMED FROM DOCUMENTATION** — pinned `i2cdev` 2.1.2 source |
 | Current firmware use | inactive adapter and real API backend compile; production continues to compose `SimulatedFoodProbeSource` | **CONFIRMED FROM CONFIG** — focused host tests and ESP-IDF 6.0.2 cross-build only |
@@ -358,9 +360,13 @@ it is mounted. Pull-up rail/value, channel gain, data rate, conversion timeout,
 cache age, and calibration are not established by the connected tests.
 
 The inactive M9 adapter remains in `smoker_platform` behind the existing
-`IFoodProbeSource` port and creates no sensor task. One owner sequences both
-descriptors and all mapped channels, with independent synchronization/
-quarantine state per physical ADC. Each device first requires a successful
+`IFoodProbeSource` port and creates no sensor task. It accepts one or two
+explicitly configured devices, so the installed `0x48` module can be described
+without inventing a second address. Zero/more-than-two devices, channels for an
+unconfigured device, and configured devices without channels are rejected.
+One owner sequences only the configured descriptors and all mapped channels,
+with independent synchronization/quarantine state per physical ADC. Each
+configured device first requires a successful
 `busy=false` observation, which discards any conversion result surviving an
 MCU-only reset without configuring or restarting in that service step. An
 unknown/busy device is skipped so the other converter can progress.
@@ -382,14 +388,28 @@ and maximum age. Same-bus devices must agree on bus configuration and use
 different addresses; distinct non-overlapping buses may reuse an address. The
 target backend overrides the driver-owned 1 MHz descriptor value before its
 first I2C transaction and uses the real pinned init/free, mode, mux, gain, rate,
-start, busy, and raw-value APIs.
+start, busy, and raw-value APIs only for the configured count.
+
+The backend requires an active target-only `I2cdevSubsystemOwner`, which calls
+real `i2cdev_init()` and grants one descriptor-owner lease. Checked backend
+shutdown attempts every acquired descriptor and retains that lease unless all
+`ads111x_free_desc()` calls return `ESP_OK`. Checked subsystem shutdown refuses
+until the lease is released and succeeds only if `i2cdev_done()` returns
+`ESP_OK`. Neither result proves all nested teardown operations succeeded or
+physical/driver quiescence. The owner permanently rejects later initialization
+through the same instance, but does not exclude another owner instance. No
+project-global mutable state is introduced; future activation must compose one
+owner and permit one initialization attempt per boot, with any restart after
+real subsystem release unsupported. Destructors perform bounded best-effort
+cleanup.
 
 Project-owned service/read code contains no explicit delay, poll loop, task
 creation, or steady-state allocation. That does not remove locked `i2cdev`'s
 mutex waits, transaction timeouts, lazy setup, internal retry delays, or
 possible driver/ESP-IDF allocation. The inactive adapter is therefore not yet
-approved for ControlTask placement. Production neither calls `i2cdev_init()`
-nor constructs it. Failures clear only the affected monitoring sample; only
+approved for ControlTask placement. Production constructs neither the owner nor
+backend and calls neither `i2cdev_init()` nor `i2cdev_done()`. Failures clear
+only the affected monitoring sample; only
 ambiguous device state adds quarantine, and BR-005/SF-008 keep chamber control
 and heater demand unchanged.
 

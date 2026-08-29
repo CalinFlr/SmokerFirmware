@@ -547,7 +547,9 @@ def check_m12_transport_contract(failures: CheckFailures) -> None:
     )
     failures.require(
         'esp-idf-lib/ads111x: "==1.1.14"' in manifest
+        and 'esp-idf-lib/i2cdev: "==2.1.2"' in manifest
         and "esp-idf-lib__ads111x" in platform_cmake
+        and "esp-idf-lib__i2cdev" in platform_cmake
         and "esp-idf-lib/ads111x:" in lock
         and "component_hash: fd18497adfb7210d750188986bc7cebc048db36abb64fdbe7216d4536083c4a2"
         in lock
@@ -556,8 +558,12 @@ def check_m12_transport_contract(failures: CheckFailures) -> None:
         in lock
         and "esp-idf-lib/esp_idf_lib_helpers:" in lock
         and "component_hash: 689853bb8993434f9556af0f2816e808bf77b5d22100144b21f3519993daf237"
-        in lock,
-        "M9 preparation must retain the exact registry ADS1115 component and locked I2C support",
+        in lock
+        and re.search(
+            r"direct_dependencies:\s*(?:\n- [^\n]+)*\n- esp-idf-lib/i2cdev(?:\n|$)",
+            lock,
+        ) is not None,
+        "M9 must retain exact ADS1115/i2cdev pins and direct locked I2C ownership dependency",
     )
     failures.require(
         "/managed_components/" in ignore,
@@ -756,10 +762,12 @@ def check_m12_transport_contract(failures: CheckFailures) -> None:
         in decisions
         and "two distinct physical ADDR selections" in decisions
         and "Production continues to compose `SimulatedFoodProbeSource`" in decisions
+        and "Software accepts one or two explicitly" in decisions
+        and "I2cdevSubsystemOwner" in decisions
         and "injected calibration/validity policy" in decisions
         and "CONFIG_I2CDEV_TIMEOUT" in decisions
         and "no ADS1115 value or failure directly changes" in decisions,
-        "D057 must preserve the exact-pinned dual-ADS1115 dependency, inactive sequencer, physical gate, and monitoring-only boundary",
+        "D057 must preserve the exact-pinned staged ADS1115/i2cdev ownership, inactive composition, physical gate, and monitoring-only boundary",
     )
     failures.require(
         "## D058 — M15 pins ESP-MQTT and provisions Blynk through UART0/NVS"
@@ -1802,8 +1810,12 @@ def check_m9_ads1115_contract(failures: CheckFailures) -> None:
     target_header = (
         platform / "include/smoker/platform/ads1115_target_backend.hpp"
     ).read_text()
+    subsystem_header = (
+        platform / "include/smoker/platform/i2cdev_subsystem.hpp"
+    ).read_text()
     source = (platform / "src/ads1115_food_probe_source.cpp").read_text()
     target = (platform / "src/ads1115_target_backend.cpp").read_text()
+    subsystem = (platform / "src/i2cdev_subsystem.cpp").read_text()
     platform_cmake = (platform / "CMakeLists.txt").read_text()
     runtime = (platform / "src/ordinary_runtime.cpp").read_text()
     main_source = (ROOT / "main/app_main.cpp").read_text()
@@ -1814,6 +1826,19 @@ def check_m9_ads1115_contract(failures: CheckFailures) -> None:
     pinned_driver = (
         pinned_driver_path.read_text() if pinned_driver_path.is_file() else None
     )
+    managed_i2cdev_dir = ROOT / "managed_components/esp-idf-lib__i2cdev"
+    pinned_i2cdev_source_path = managed_i2cdev_dir / "i2cdev.c"
+    pinned_i2cdev_header_path = managed_i2cdev_dir / "i2cdev.h"
+    pinned_i2cdev_source = None
+    pinned_i2cdev_header = None
+    if managed_i2cdev_dir.exists():
+        failures.require(
+            pinned_i2cdev_source_path.is_file() and pinned_i2cdev_header_path.is_file(),
+            "present managed i2cdev input must contain complete i2cdev.c/i2cdev.h lifecycle sources",
+        )
+        if pinned_i2cdev_source_path.is_file() and pinned_i2cdev_header_path.is_file():
+            pinned_i2cdev_source = pinned_i2cdev_source_path.read_text()
+            pinned_i2cdev_header = pinned_i2cdev_header_path.read_text()
 
     lower_layer_text = "\n".join(
         path.read_text()
@@ -1828,9 +1853,10 @@ def check_m9_ads1115_contract(failures: CheckFailures) -> None:
     failures.require(
         '"src/ads1115_food_probe_source.cpp"' in platform_cmake
         and '"src/ads1115_target_backend.cpp"' in platform_cmake
+        and '"src/i2cdev_subsystem.cpp"' in platform_cmake
         and platform_cmake.find('"src/ads1115_target_backend.cpp"')
             > platform_cmake.find("if(ESP_PLATFORM)"),
-        "the ADS1115 sequencer must be host-buildable and its real backend target-only",
+        "the ADS1115 sequencer must be host-buildable and target backend/subsystem owner target-only",
     )
 
     failures.require(
@@ -1870,14 +1896,16 @@ def check_m9_ads1115_contract(failures: CheckFailures) -> None:
         "all ADS1115 bus, mapping, conversion, timeout, and age values must be explicit",
     )
     failures.require(
-        "devices.size() != ads1115_device_count" in source
+        "devices.empty()" in source
+        and "devices.size() > ads1115_maximum_device_count" in source
+        and "devices.size() == ads1115_maximum_device_count" in source
         and "compatible_device_pair" in source
         and "first.address != second.address" in source
         and "first.i2c_port == second.i2c_port" in source
         and "device_has_channel" in source
         and "channels[earlier].probe_id == channel.probe_id" in source
         and "minimum_ads1115_conversion_timeout(channel.data_rate)" in source,
-        "M9 configuration must validate two devices, shared buses, mappings, IDs, and deadlines",
+        "M9 configuration must validate one/two devices, shared buses, mappings, IDs, and deadlines",
     )
 
     read_section = source_section(
@@ -1977,10 +2005,135 @@ def check_m9_ads1115_contract(failures: CheckFailures) -> None:
     )
     failures.require(
         "std::array<i2c_dev_t, 2U> descriptors_" in target_header
+        and "std::size_t descriptor_count_{0U}" in target_header
+        and "explicit Ads1115TargetBackend(I2cdevSubsystemOwner& subsystem)"
+            in target_header
         and "~Ads1115TargetBackend()" in target
-        and "release_descriptors();" in target,
-        "the target backend must be the RAII owner of both ADS1115 descriptors",
+        and "bool Ads1115TargetBackend::shutdown()" in target,
+        "the target backend must own one/two active descriptors and expose checked RAII cleanup",
     )
+
+    backend_shutdown = source_section(
+        target,
+        "bool Ads1115TargetBackend::shutdown()",
+        "} // namespace smoker::platform",
+    )
+    failures.require(
+        "!subsystem_.active()" in initialize_section
+        and initialize_section.find("subsystem_.acquire_descriptor_owner()")
+            < initialize_section.find("ads111x_init_desc(")
+        and "devices.empty()" in initialize_section
+        and "devices.size() > descriptors_.size()" in initialize_section
+        and "device_index < descriptor_count_" in target
+        and bool(backend_shutdown)
+        and "bool all_released = true;" in backend_shutdown
+        and "ads111x_free_desc(" in backend_shutdown
+        and backend_shutdown.find("ads111x_free_desc(")
+            < backend_shutdown.find("subsystem_.release_descriptor_owner()")
+        and "all_released = false;" in backend_shutdown,
+        "the target backend must require active subsystem ownership, bound every call to the configured count, and aggregate descriptor cleanup before releasing its lease",
+    )
+
+    owner_initialize = source_section(
+        subsystem,
+        "bool I2cdevSubsystemOwner::initialize()",
+        "bool I2cdevSubsystemOwner::shutdown()",
+    )
+    owner_shutdown = source_section(
+        subsystem,
+        "bool I2cdevSubsystemOwner::shutdown()",
+        "bool I2cdevSubsystemOwner::active()",
+    )
+    failures.require(
+        "class I2cdevSubsystemOwner final" in subsystem_header
+        and "I2cdevSubsystemOwner(const I2cdevSubsystemOwner&) = delete;"
+            in subsystem_header
+        and "I2cdevSubsystemOwner(I2cdevSubsystemOwner&&) = delete;"
+            in subsystem_header
+        and "Lifecycle::NeverInitialized" in owner_initialize
+        and owner_initialize.find("i2cdev_init()")
+            < owner_initialize.find("Lifecycle::Active")
+        and "lifecycle_ = Lifecycle::Released;" in owner_initialize
+        and bool(owner_shutdown)
+        and owner_shutdown.find("descriptor_owner_active_")
+            < owner_shutdown.find("i2cdev_done()")
+        and owner_shutdown.find("i2cdev_done()")
+            < owner_shutdown.find("lifecycle_ = Lifecycle::Released")
+        and "return result == ESP_OK;" in owner_shutdown
+        and "static " not in subsystem
+        and "~I2cdevSubsystemOwner()" in subsystem
+        and "i2cdev_done()" in subsystem,
+        "the target subsystem owner must be non-copyable, project-global-free, initialize once, reject restart, and report checked shutdown after descriptor release",
+    )
+
+    lifecycle_calls = find_calls(
+        r"\bi2cdev_(?:init|done)\s*\(",
+        source_files("components", "main"),
+    )
+    lifecycle_call_owners = {relative(path) for path, _ in lifecycle_calls}
+    failures.require(
+        lifecycle_call_owners
+            == {"components/smoker_platform/src/i2cdev_subsystem.cpp"}
+        and "i2cdev_init(" in subsystem
+        and "i2cdev_done(" in subsystem,
+        "i2cdev_init()/i2cdev_done() calls are permitted only in the target subsystem owner",
+    )
+
+    if pinned_i2cdev_source is not None and pinned_i2cdev_header is not None:
+        upstream_init = source_section(
+            pinned_i2cdev_source,
+            "esp_err_t i2cdev_init(void)",
+            "esp_err_t i2c_dev_create_mutex(",
+        )
+        upstream_done = source_section(
+            pinned_i2cdev_source,
+            "esp_err_t i2cdev_done(void)",
+            "esp_err_t i2cdev_get_shared_handle(",
+        )
+        upstream_delete_mutex = source_section(
+            pinned_i2cdev_source,
+            "esp_err_t i2c_dev_delete_mutex(",
+            "esp_err_t i2c_dev_take_mutex(",
+        )
+        upstream_setup = source_section(
+            pinned_i2cdev_source,
+            "static esp_err_t i2c_setup_port(",
+            "static esp_err_t i2c_setup_device(",
+        )
+        failures.require(
+            "static bool initialized = false;" in upstream_init
+            and "if (initialized)" in upstream_init
+            and "initialized = true" in upstream_init
+            and "initialized = false" not in upstream_done
+            and "vSemaphoreDelete(i2c_ports[i].lock);" in upstream_done
+            and "i2c_ports[i].lock = NULL;" in upstream_done
+            and "if (!port_state->lock)" in upstream_setup
+            and "call i2cdev_init() first" in upstream_setup
+            and "before any I2C devices are initialized" in pinned_i2cdev_header,
+            "present locked i2cdev 2.1.2 source must retain the init-before-I/O and non-restartable-after-done lifecycle assumed by the owner",
+        )
+        failures.require(
+            "return ESP_ERR_TIMEOUT;" in upstream_delete_mutex
+            and "i2c_master_bus_rm_device(" in upstream_delete_mutex
+            and "if (rm_res != ESP_OK)" in upstream_delete_mutex
+            and "dev->dev_handle = NULL;" in upstream_delete_mutex
+            and "return rm_res" not in upstream_delete_mutex
+            and "i2c_del_master_bus(" in upstream_delete_mutex
+            and "if (del_bus_res != ESP_OK)" in upstream_delete_mutex
+            and "port_state->bus_handle = NULL;" in upstream_delete_mutex
+            and "return del_bus_res" not in upstream_delete_mutex
+            and "return ESP_OK;" in upstream_delete_mutex,
+            "present locked i2cdev 2.1.2 source must retain the cleanup-observability boundary: port-lock timeout is reported while nested device/bus deletion failures are swallowed before ESP_OK",
+        )
+        failures.require(
+            pinned_driver is not None
+            and "i2c_dev_create_mutex(dev)" in source_section(
+                pinned_driver,
+                "esp_err_t ads111x_init_desc(",
+                "esp_err_t ads111x_free_desc(",
+            ),
+            "present locked ads111x source must retain descriptor-mutex creation in ads111x_init_desc()",
+        )
 
     project_m9 = source + "\n" + target
     for forbidden in (
@@ -1995,6 +2148,7 @@ def check_m9_ads1115_contract(failures: CheckFailures) -> None:
         "make_shared",
         "xTaskCreate",
         "i2cdev_init(",
+        "i2cdev_done(",
     ):
         failures.require(
             forbidden not in project_m9,
@@ -2011,15 +2165,23 @@ def check_m9_ads1115_contract(failures: CheckFailures) -> None:
         and "start_ordinary_runtime" in main_source
         and "Ads1115FoodProbeSource" not in runtime
         and "Ads1115TargetBackend" not in runtime
+        and "I2cdevSubsystemOwner" not in runtime
         and "Ads1115FoodProbeSource" not in main_source
         and "Ads1115TargetBackend" not in main_source
+        and "I2cdevSubsystemOwner" not in main_source
         and "i2cdev_init(" not in runtime
-        and "i2cdev_init(" not in main_source,
-        "production composition must remain simulated and must not initialize ADS1115/I2C",
+        and "i2cdev_done(" not in runtime
+        and "i2cdev_init(" not in main_source
+        and "i2cdev_done(" not in main_source
+        and "Max31865ChamberSensor" in runtime
+        and "DeterministicChamberController" in runtime
+        and "SimulatedHeaterOutput" in runtime,
+        "production composition must retain real chamber plus simulated food/heater and must not own ADS1115/i2cdev",
     )
 
     for evidence in (
         "test_ads1115_invalid_incomplete_configurations_are_rejected",
+        "test_ads1115_one_device_sequencer_never_touches_device_one",
         "test_ads1115_both_devices_require_initial_idle_synchronization",
         "test_ads1115_initial_stale_result_is_discarded_before_later_restart",
         "test_ads1115_fake_latches_in_flight_provenance_across_reconfiguration",

@@ -130,6 +130,7 @@ public:
         const Ads1115ChannelConfiguration& channel
     ) noexcept override
     {
+        assert(channel.device_index < initialized_device_count);
         const auto provenance = provenance_of(channel);
         record(BackendAction::Configure, provenance);
         if (fail_configure_probe == channel.probe_id) return false;
@@ -141,6 +142,7 @@ public:
         const std::size_t device_index
     ) noexcept override
     {
+        assert(device_index < initialized_device_count);
         auto& device = devices_[device_index];
         if (!device.configured) return false;
         record(BackendAction::Start, *device.configured);
@@ -160,6 +162,7 @@ public:
         bool& busy_result
     ) noexcept override
     {
+        assert(device_index < initialized_device_count);
         auto& device = devices_[device_index];
         record(
             BackendAction::Busy,
@@ -177,6 +180,7 @@ public:
         std::int16_t& raw_value
     ) noexcept override
     {
+        assert(device_index < initialized_device_count);
         auto& device = devices_[device_index];
         if (!device.in_flight) return false;
         const auto provenance = *device.in_flight;
@@ -334,6 +338,23 @@ public:
     };
 }
 
+[[nodiscard]] std::vector<Ads1115ChannelConfiguration> device_zero_channels()
+{
+    auto channels = three_channels();
+    channels.pop_back();
+    return channels;
+}
+
+[[nodiscard]] Ads1115AcquisitionConfiguration one_device_configuration()
+{
+    using namespace std::chrono_literals;
+    auto devices = shared_bus_devices();
+    devices.pop_back();
+    return Ads1115AcquisitionConfiguration{
+        std::move(devices), device_zero_channels(), 25ms, 100ms,
+    };
+}
+
 [[nodiscard]] Ads1115AcquisitionConfiguration valid_configuration()
 {
     using namespace std::chrono_literals;
@@ -366,13 +387,30 @@ void test_ads1115_invalid_incomplete_configurations_are_rejected()
 
     const auto valid = valid_configuration();
     assert(valid_ads1115_acquisition_configuration(valid));
+    assert(valid_ads1115_acquisition_configuration(one_device_configuration()));
     assert(minimum_ads1115_conversion_timeout(Ads1115DataRate::SamplesPerSecond8) == 139ms);
     assert(minimum_ads1115_conversion_timeout(Ads1115DataRate::SamplesPerSecond860) == 2ms);
+
+    assert(!valid_ads1115_acquisition_configuration({
+        {}, device_zero_channels(), 25ms, 100ms,
+    }));
+
+    auto three_devices = shared_bus_devices();
+    three_devices.push_back(Ads1115DeviceConfiguration{
+        0, 8, 9, 400'000U, Ads1115PullupPolicy::External, 0x4aU,
+    });
+    assert(!valid_ads1115_acquisition_configuration({
+        std::move(three_devices), three_channels(), 25ms, 100ms,
+    }));
 
     auto one_device = shared_bus_devices();
     one_device.pop_back();
     assert(!valid_ads1115_acquisition_configuration({
         std::move(one_device), three_channels(), 25ms, 100ms,
+    }));
+
+    assert(!valid_ads1115_acquisition_configuration({
+        shared_bus_devices(), device_zero_channels(), 25ms, 100ms,
     }));
     assert(!valid_ads1115_acquisition_configuration({
         shared_bus_devices(), {}, 25ms, 100ms,
@@ -437,6 +475,37 @@ void test_ads1115_invalid_incomplete_configurations_are_rejected()
     };
     assert(!rejected.configured());
     assert(backend.initialize_calls == 0U);
+}
+
+void test_ads1115_one_device_sequencer_never_touches_device_one()
+{
+    FakeAds1115Backend backend;
+    FakeSampleConverter converter;
+    FakeMonotonicClock clock;
+    Ads1115FoodProbeSource source{
+        one_device_configuration(), backend, converter, clock,
+    };
+    assert(source.configured());
+    assert(backend.initialize_calls == 1U);
+    assert(backend.initialized_device_count == 1U);
+
+    source.service();
+    source.service();
+    complete_active_conversion(source, backend, clock, 0U);
+    source.service();
+    complete_active_conversion(source, backend, clock, 0U);
+    source.service();
+    complete_active_conversion(source, backend, clock, 0U);
+
+    assert(source.read(1U));
+    assert(source.read(3U));
+    assert(backend.count_calls(BackendAction::Busy, 1U) == 0U);
+    assert(backend.count_calls(BackendAction::Configure, 1U) == 0U);
+    assert(backend.count_calls(BackendAction::Start, 1U) == 0U);
+    assert(backend.count_calls(BackendAction::Get, 1U) == 0U);
+    for (std::size_t index = 0U; index < backend.call_count; ++index) {
+        assert(backend.calls[index].device_index == 0U);
+    }
 }
 
 void test_ads1115_both_devices_require_initial_idle_synchronization()
@@ -1009,6 +1078,7 @@ void test_ads1115_missing_or_invalid_food_probe_never_changes_chamber_control()
 int main()
 {
     test_ads1115_invalid_incomplete_configurations_are_rejected();
+    test_ads1115_one_device_sequencer_never_touches_device_one();
     test_ads1115_both_devices_require_initial_idle_synchronization();
     test_ads1115_initial_stale_result_is_discarded_before_later_restart();
     test_ads1115_fake_latches_in_flight_provenance_across_reconfiguration();

@@ -21,6 +21,7 @@ if(ESP_PLATFORM)
         "src/esp_monotonic_clock.cpp"
         "src/firmware_update_service.cpp"
         "src/history_service.cpp"
+        "src/i2cdev_subsystem.cpp"
         "src/local_connectivity.cpp"
         "src/max31865_target_backend.cpp"
         "src/max31865_spi_bus.cpp"
@@ -51,6 +52,7 @@ if(ESP_PLATFORM)
             mqtt
             espressif__pid_ctrl
             esp-idf-lib__ads111x
+            esp-idf-lib__i2cdev
             esp-idf-lib__max31865
             espressif__cjson
             espressif__mdns
