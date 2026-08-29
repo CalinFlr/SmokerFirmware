@@ -1,6 +1,7 @@
 #include "smoker/app/command_mailbox.hpp"
 #include "smoker/app/snapshot_exchange.hpp"
 #include "smoker/platform/local_network_support.hpp"
+#include "smoker/platform/runtime_transport_support.hpp"
 
 #include <array>
 #include <atomic>
@@ -12,6 +13,7 @@
 #include <new>
 #include <optional>
 #include <thread>
+#include <type_traits>
 #include <variant>
 
 namespace allocation_probe {
@@ -360,6 +362,66 @@ void test_snapshot_exchange(TestContext& context)
     const auto allocations = allocation_probe::end();
     context.require(published, "M12 allocation test publishes snapshot");
     context.require(allocations == 0U, "M12 critical snapshot publication allocates no C++ heap");
+}
+
+void test_control_readiness_latch(TestContext& context)
+{
+    using Latch = smoker::platform::ControlReadinessLatch;
+    static_assert(std::is_same_v<
+        decltype(&Latch::observe_cycle),
+        bool (Latch::*)(bool, bool) noexcept
+    >);
+
+    Latch initial;
+    context.require(!initial.ready(), "control readiness starts false");
+    context.require(
+        !initial.observe_cycle(false, true) && !initial.ready(),
+        "failed first snapshot publish leaves control not ready"
+    );
+    context.require(
+        initial.observe_cycle(true, true) && initial.ready(),
+        "a later complete published and watchdog-reset cycle transitions ready"
+    );
+
+    Latch watchdog_failure;
+    context.require(
+        !watchdog_failure.observe_cycle(true, false)
+            && !watchdog_failure.ready(),
+        "failed watchdog reset emits no readiness transition"
+    );
+    context.require(
+        !watchdog_failure.observe_cycle(false, false)
+            && !watchdog_failure.ready(),
+        "a cycle missing both proofs remains not ready"
+    );
+
+    Latch first_complete_cycle;
+    context.require(
+        first_complete_cycle.observe_cycle(true, true)
+            && first_complete_cycle.ready(),
+        "the first cycle with both proofs emits the readiness transition"
+    );
+    for (std::size_t cycle = 0U; cycle < 4U; ++cycle) {
+        context.require(
+            !first_complete_cycle.observe_cycle(true, true)
+                && first_complete_cycle.ready(),
+            "readiness remains one-shot across later complete cycles"
+        );
+    }
+
+    Latch retry_after_publish_failure;
+    context.require(
+        !retry_after_publish_failure.observe_cycle(false, true),
+        "publish failure does not consume the readiness opportunity"
+    );
+    context.require(
+        retry_after_publish_failure.observe_cycle(true, true)
+            && retry_after_publish_failure.ready(),
+        "readiness retries successfully after a transient publish failure"
+    );
+
+    // The compile-time API assertion above is also the fault-independence
+    // contract: session, fault, temperature, and heater state cannot be inputs.
 }
 
 void test_wifi_fallback_deadline(TestContext& context)
@@ -877,6 +939,7 @@ int main()
     test_mailbox_fifo_stop_and_overflow(context);
     test_mailbox_concurrency(context);
     test_snapshot_exchange(context);
+    test_control_readiness_latch(context);
     test_snapshot_exchange_concurrency(context);
     test_wifi_scan_curation(context);
     test_http_device_authority(context);

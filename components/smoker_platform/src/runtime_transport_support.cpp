@@ -13,6 +13,23 @@ namespace {
 
 } // namespace
 
+bool ControlReadinessLatch::observe_cycle(
+    const bool snapshot_published,
+    const bool watchdog_reset_succeeded
+) noexcept
+{
+    if (ready_ || !snapshot_published || !watchdog_reset_succeeded) {
+        return false;
+    }
+    ready_ = true;
+    return true;
+}
+
+bool ControlReadinessLatch::ready() const noexcept
+{
+    return ready_;
+}
+
 RuntimeIdGenerator::RuntimeIdGenerator(
     const std::uint32_t initial_session,
     const std::uint32_t initial_correlation

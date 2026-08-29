@@ -129,6 +129,15 @@ Reset-reason recording and recovery-policy evaluation are M10 work after the
 target controller board is identified at M6A. Therefore M5 is not a complete
 implementation of all SF-004 bullets.
 
+The local HTTP control-readiness flag is an observability gate, not permission
+to heat and not proof that startup services succeeded. It begins false and is
+published only by `ControlTask` after a complete safety-gated heater-write
+cycle, successful immutable snapshot publication, and successful TWDT reset.
+A completed cycle whose snapshot is `FAULT` may become ready so the fault is
+observable instead of being hidden behind a permanent `503`; the fault still
+forces heater OFF under SF-001/SF-002/SF-007. Wi-Fi, history, Blynk, and other
+auxiliary-service state do not participate in this transition.
+
 ### SF-005 — Detect control-path stalls
 
 The implementation must use appropriate watchdog mechanisms so a stalled critical control path is detectable.

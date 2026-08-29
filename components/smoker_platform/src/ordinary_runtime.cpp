@@ -137,6 +137,7 @@ public:
     SimulatedHeaterOutput heater;
     SimulatedEventSink events;
     app::SmokerApplication application;
+    ControlReadinessLatch control_readiness;
     RuntimeIdGenerator ids;
     app::SpscCommandMailbox http_mailbox;
     app::SpscCommandMailbox blynk_mailbox;
@@ -288,7 +289,7 @@ void control_task(void* const parameter)
         ));
         context->application.tick();
         const auto snapshot = context->application.snapshot_view();
-        static_cast<void>(context->snapshots.publish(snapshot));
+        const bool snapshot_published = context->snapshots.publish(snapshot);
         context->history_mailbox.observe(snapshot);
         ++completed_cycles;
         if (completed_cycles == 1U || completed_cycles % runtime_log_period_cycles == 0U) {
@@ -350,6 +351,11 @@ void control_task(void* const parameter)
         context->firmware_updates.publish_control_cycle(
             snapshot, watchdog_status == ESP_OK
         );
+        if (context->control_readiness.observe_cycle(
+                snapshot_published, watchdog_status == ESP_OK
+            )) {
+            context->connectivity.mark_control_ready();
+        }
         ESP_ERROR_CHECK(watchdog_status);
         xTaskDelayUntil(&last_wake, control_period_ticks);
     }
@@ -439,7 +445,6 @@ bool start_ordinary_runtime(OrdinaryRuntimeConfiguration configuration) noexcept
     if (!task_context->blynk.start()) {
         ESP_LOGE(tag, "Blynk service unavailable; autonomous ControlTask continues");
     }
-    task_context->connectivity.mark_control_ready();
 
     return true;
 }
