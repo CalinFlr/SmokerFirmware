@@ -316,6 +316,15 @@ timer, authoritative chamber input, safety gate, or final heater command. This
 software isolation is not evidence of sensor, SSR, thermal, or independent
 electrical-safety behavior.
 
+A failed lifecycle START or END remains pending and may be retried only while
+`CircularHistoryLog` has not reported terminal `FAILED`. Immediately when a
+runtime write failure makes that state `FAILED`, `HistoryTask` enters fail-stop:
+it releases the pending lifecycle record, consumes no later observation for
+persistence, and initiates no further history flash read/write/erase operation.
+History health continues to expose `FAILED` with the initialized log's actual
+counters where available. Local control continues autonomously because durable
+history remains auxiliary evidence, never a control or recovery input.
+
 ## M15 remote-access safety boundary
 
 Blynk is a replaceable, non-critical transport. A platform-owned low-priority

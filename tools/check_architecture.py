@@ -2288,11 +2288,36 @@ def check_m14_history_contract(failures: CheckFailures) -> None:
         "HistoryTask must release its flash lease before its idle wait",
     )
     failures.require(
-        "std::optional<HistoryObservation> pending_lifecycle" in history
-        and "observation.kind == HistoryObservationKind::Start" in history
-        and "observation.kind == HistoryObservationKind::End" in history
-        and "pending_lifecycle = observation" in history,
-        "HistoryTask must retain failed START/END lifecycle records for durable retry",
+        "HistoryWritePolicy write_policy" in history
+        and "write_policy.has_pending_lifecycle()" in history
+        and "HistoryWriteCycleResult::TerminalFailStop" in history
+        and history.count("History storage FAILED; stopping flash persistence") == 1
+        and "failed_write_threshold" not in history,
+        "HistoryTask must use log-owned FAILED state for one-shot terminal fail-stop",
+    )
+    write_policy = source_section(
+        header,
+        "class HistoryWritePolicy final {",
+        "} // namespace smoker::platform",
+    )
+    terminal_check = write_policy.find("if (terminal_)")
+    writer_call = write_policy.find("std::forward<Writer>(writer)")
+    failed_transition = write_policy.find(
+        "attempt.storage_state == HistoryStorageState::Failed"
+    )
+    failures.require(
+        terminal_check >= 0
+        and writer_call > terminal_check
+        and failed_transition > writer_call
+        and "pending_lifecycle_.reset();\n            terminal_ = true;" in write_policy
+        and "return HistoryWriteCycleResult::Stopped;" in write_policy,
+        "the portable history write policy must retry lifecycle only before FAILED and never call its writer afterward",
+    )
+    failures.require(
+        "&& !initialized_.load(std::memory_order_acquire)" in history
+        and "auto result = log_.health();" in history
+        and "result.state = HistoryStorageState::Failed;" in history,
+        "runtime history failure health must retain initialized CircularHistoryLog counters",
     )
     failures.require(
         re.search(
@@ -2327,6 +2352,10 @@ def check_m14_history_contract(failures: CheckFailures) -> None:
         "test_pagination_and_stride",
         "test_rollover_eviction_truncation_and_interruption",
         "test_sampling_and_mailbox_saturation",
+        "test_start_transient_failure_is_retried",
+        "test_end_transient_failure_is_retried",
+        "test_lifecycle_terminal_failure_stops_writes",
+        "test_ordinary_terminal_failure_stops_writes",
         "test_flash_operation_serialization",
         "test_mailbox_concurrency",
         "test_strict_history_queries",

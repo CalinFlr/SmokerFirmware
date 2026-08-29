@@ -45,6 +45,9 @@ using smoker::platform::HistoryObservation;
 using smoker::platform::HistoryObservationKind;
 using smoker::platform::HistoryObservationMailbox;
 using smoker::platform::HistoryStorageState;
+using smoker::platform::HistoryWriteAttemptResult;
+using smoker::platform::HistoryWriteCycleResult;
+using smoker::platform::HistoryWritePolicy;
 using smoker::platform::IHistoryFlash;
 
 struct TestContext final {
@@ -158,6 +161,8 @@ public:
         fail_erase_call_ = erase_calls_ + successful_erases + 1U;
         partially_erase_on_failure_ = partially_erase;
     }
+    [[nodiscard]] std::size_t read_calls() const noexcept { return read_calls_; }
+    [[nodiscard]] std::size_t write_calls() const noexcept { return write_calls_; }
     [[nodiscard]] std::size_t erase_calls() const noexcept { return erase_calls_; }
     void corrupt(const std::size_t offset) noexcept { bytes_[offset] ^= 0x01U; }
 
@@ -193,6 +198,41 @@ HistoryObservation observation(
     });
     return value;
 }
+
+class HistoryWriterHarness final {
+public:
+    explicit HistoryWriterHarness(CircularHistoryLog& log) noexcept
+        : log_{log}
+    {
+    }
+
+    [[nodiscard]] HistoryWriteCycleResult cycle(
+        std::optional<HistoryObservation> incoming = std::nullopt
+    )
+    {
+        return policy_.process(
+            std::move(incoming),
+            [this](const HistoryObservation& candidate) {
+                ++writer_invocations_;
+                const bool written = candidate.kind == HistoryObservationKind::Start
+                    ? log_.begin_session(candidate).has_value()
+                    : log_.append(candidate);
+                return HistoryWriteAttemptResult{written, log_.health().state};
+            }
+        );
+    }
+
+    [[nodiscard]] const HistoryWritePolicy& policy() const noexcept { return policy_; }
+    [[nodiscard]] std::size_t writer_invocations() const noexcept
+    {
+        return writer_invocations_;
+    }
+
+private:
+    CircularHistoryLog& log_;
+    HistoryWritePolicy policy_;
+    std::size_t writer_invocations_{0U};
+};
 
 void test_empty_random_and_reboot(TestContext& context)
 {
@@ -397,6 +437,190 @@ void test_torn_and_corrupt_records(TestContext& context)
     context.require(ended_sessions.size() == 1U && !ended_sessions.front().active
                         && !ended_sessions.front().interrupted,
                     "retried END closes the durable session");
+}
+
+void test_start_transient_failure_is_retried(TestContext& context)
+{
+    MemoryFlash flash{4U};
+    CircularHistoryLog log{flash};
+    context.require(log.initialize(), "START policy retry flash initializes");
+    HistoryWriterHarness writer{log};
+
+    flash.fail_next_write_after(0U);
+    context.require(
+        writer.cycle(observation(HistoryObservationKind::Start, 0))
+            == HistoryWriteCycleResult::RetryLifecycle,
+        "a transient START failure remains retryable"
+    );
+    context.require(
+        writer.policy().has_pending_lifecycle()
+            && log.health().state != HistoryStorageState::Failed,
+        "START remains pending only while storage is not terminal"
+    );
+
+    flash.stop_failing();
+    context.require(
+        writer.cycle() == HistoryWriteCycleResult::Written,
+        "pending START is written after flash recovery"
+    );
+    context.require(
+        !writer.policy().has_pending_lifecycle()
+            && writer.cycle(observation(HistoryObservationKind::Change, 1'000))
+                == HistoryWriteCycleResult::Written,
+        "processing continues after the recovered START preserves lifecycle order"
+    );
+}
+
+void test_end_transient_failure_is_retried(TestContext& context)
+{
+    MemoryFlash flash{4U};
+    CircularHistoryLog log{flash};
+    context.require(log.initialize(), "END policy retry flash initializes");
+    HistoryWriterHarness writer{log};
+    context.require(
+        writer.cycle(observation(HistoryObservationKind::Start, 0))
+            == HistoryWriteCycleResult::Written,
+        "END policy retry session starts"
+    );
+
+    auto end = observation(HistoryObservationKind::End, 60'000, SessionStatus::Stopped);
+    end.stop_reason = smoker::core::StopReason::User;
+    flash.fail_next_write_after(1U);
+    context.require(
+        writer.cycle(end) == HistoryWriteCycleResult::RetryLifecycle,
+        "a transient END failure remains retryable"
+    );
+    context.require(
+        writer.policy().has_pending_lifecycle()
+            && log.health().state != HistoryStorageState::Failed,
+        "END remains pending before the terminal threshold"
+    );
+
+    flash.stop_failing();
+    context.require(
+        writer.cycle() == HistoryWriteCycleResult::Written,
+        "pending END is written after flash recovery"
+    );
+    const auto sessions = log.sessions(std::nullopt, 8U);
+    context.require(
+        sessions.size() == 1U && !sessions.front().active
+            && !sessions.front().interrupted
+            && sessions.front().stop_reason == smoker::core::StopReason::User,
+        "recovered END closes the durable session correctly"
+    );
+}
+
+void test_lifecycle_terminal_failure_stops_writes(TestContext& context)
+{
+    MemoryFlash flash{4U};
+    CircularHistoryLog log{flash};
+    context.require(log.initialize(), "terminal lifecycle flash initializes");
+    log.set_mailbox_drops(7U);
+    HistoryWriterHarness writer{log};
+    flash.fail_all_writes();
+
+    context.require(
+        writer.cycle(observation(HistoryObservationKind::Start, 0))
+            == HistoryWriteCycleResult::RetryLifecycle,
+        "permanent START failure first remains pending"
+    );
+    context.require(
+        writer.cycle() == HistoryWriteCycleResult::RetryLifecycle,
+        "permanent START failure retries before terminal state"
+    );
+    context.require(
+        writer.cycle() == HistoryWriteCycleResult::TerminalFailStop,
+        "the log's FAILED transition stops lifecycle persistence"
+    );
+    context.require(
+        writer.policy().terminal() && !writer.policy().has_pending_lifecycle(),
+        "terminal fail-stop releases the pending lifecycle observation"
+    );
+
+    const auto terminal_health = log.health();
+    context.require(
+        terminal_health.state == HistoryStorageState::Failed
+            && terminal_health.write_errors == 3U
+            && terminal_health.mailbox_drops == 7U
+            && terminal_health.corrupt_records == 0U
+            && terminal_health.capacity_bytes == flash.size(),
+        "terminal health retains the log's real counters and capacity"
+    );
+    const auto reads = flash.read_calls();
+    const auto writes = flash.write_calls();
+    const auto erases = flash.erase_calls();
+    const auto invocations = writer.writer_invocations();
+    for (std::uint32_t cycle = 0U; cycle < 8U; ++cycle) {
+        context.require(
+            writer.cycle(observation(HistoryObservationKind::Change, 1'000 + cycle))
+                == HistoryWriteCycleResult::Stopped,
+            "terminal lifecycle policy rejects every later processing cycle"
+        );
+    }
+    context.require(
+        flash.read_calls() == reads && flash.write_calls() == writes
+            && flash.erase_calls() == erases
+            && writer.writer_invocations() == invocations,
+        "terminal lifecycle failure performs no later read, write, erase, or writer call"
+    );
+}
+
+void test_ordinary_terminal_failure_stops_writes(TestContext& context)
+{
+    MemoryFlash flash{4U};
+    CircularHistoryLog log{flash};
+    context.require(log.initialize(), "terminal ordinary flash initializes");
+    log.set_mailbox_drops(5U);
+    HistoryWriterHarness writer{log};
+    context.require(
+        writer.cycle(observation(HistoryObservationKind::Start, 0))
+            == HistoryWriteCycleResult::Written,
+        "terminal ordinary failure session starts"
+    );
+    flash.fail_all_writes();
+
+    context.require(
+        writer.cycle(observation(HistoryObservationKind::Sample, 60'000))
+            == HistoryWriteCycleResult::DroppedOrdinary,
+        "a non-terminal failed SAMPLE is dropped instead of blocking lifecycle"
+    );
+    context.require(
+        writer.cycle(observation(HistoryObservationKind::Change, 61'000))
+            == HistoryWriteCycleResult::DroppedOrdinary,
+        "a second ordinary failure remains non-terminal until the log says FAILED"
+    );
+    context.require(
+        writer.cycle(observation(HistoryObservationKind::Sample, 120'000))
+            == HistoryWriteCycleResult::TerminalFailStop,
+        "ordinary observation failure enters the same terminal fail-stop"
+    );
+
+    const auto terminal_health = log.health();
+    context.require(
+        terminal_health.state == HistoryStorageState::Failed
+            && terminal_health.write_errors == 3U
+            && terminal_health.mailbox_drops == 5U
+            && terminal_health.capacity_bytes == flash.size()
+            && terminal_health.used_bytes > 0U,
+        "ordinary terminal failure preserves precise initialized-log health"
+    );
+    const auto reads = flash.read_calls();
+    const auto writes = flash.write_calls();
+    const auto erases = flash.erase_calls();
+    const auto invocations = writer.writer_invocations();
+    for (std::uint32_t cycle = 0U; cycle < 8U; ++cycle) {
+        context.require(
+            writer.cycle(observation(HistoryObservationKind::Sample, 180'000 + cycle))
+                == HistoryWriteCycleResult::Stopped,
+            "terminal ordinary policy refuses later observations"
+        );
+    }
+    context.require(
+        flash.read_calls() == reads && flash.write_calls() == writes
+            && flash.erase_calls() == erases
+            && writer.writer_invocations() == invocations,
+        "ordinary fail-stop performs no later flash operation or writer invocation"
+    );
 }
 
 void test_pagination_and_stride(TestContext& context)
@@ -710,7 +934,20 @@ void test_control_output_is_independent_of_history_saturation(TestContext& conte
     smoker::core::Recipe recipe{
         1U,
         "M14 saturation",
-        smoker::core::Stage{1U, "Single stage", temperature(110.0F), std::nullopt},
+        smoker::core::Stage{
+            1U,
+            "Single stage",
+            temperature(110.0F),
+            smoker::core::StageTimer{
+                Duration{120'000},
+                smoker::core::TimerStartCondition{
+                    smoker::core::TimerStartConditionType::Immediate,
+                    std::nullopt,
+                    std::nullopt,
+                },
+                smoker::core::TimerCompletionAction::Notify,
+            },
+        },
     };
     context.require(
         application.submit(smoker::app::StartSessionCommand{1U, recipe}),
@@ -749,6 +986,18 @@ void test_control_output_is_independent_of_history_saturation(TestContext& conte
     context.require(
         heater.last_demand().percent() == 0.0F,
         "control still turns heater off from chamber state while history is saturated"
+    );
+    const auto final_snapshot = application.snapshot();
+    context.require(
+        final_snapshot.session_status == SessionStatus::Running
+            && final_snapshot.timer.started && !final_snapshot.timer.completed
+            && final_snapshot.timer.elapsed == Duration{25'000}
+            && !final_snapshot.active_fault,
+        "history saturation changes neither session, timer, nor active fault state"
+    );
+    context.require(
+        heater.history().size() == 27U,
+        "every control cycle still reaches the final heater write during saturation"
     );
 }
 
@@ -836,6 +1085,10 @@ int main()
     TestContext context;
     test_empty_random_and_reboot(context);
     test_torn_and_corrupt_records(context);
+    test_start_transient_failure_is_retried(context);
+    test_end_transient_failure_is_retried(context);
+    test_lifecycle_terminal_failure_stops_writes(context);
+    test_ordinary_terminal_failure_stops_writes(context);
     test_pagination_and_stride(context);
     test_rollover_eviction_truncation_and_interruption(context);
     test_sampling_and_mailbox_saturation(context);

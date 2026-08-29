@@ -134,7 +134,8 @@ public:
 
     HistoryHealth health() const noexcept
     {
-        if (failed_.load(std::memory_order_acquire)) {
+        if (failed_.load(std::memory_order_acquire)
+            && !initialized_.load(std::memory_order_acquire)) {
             return HistoryHealth{
                 HistoryStorageState::Failed,
                 mailbox_.dropped_count(), 0U, 1U,
@@ -144,6 +145,9 @@ public:
         std::lock_guard lock{mutex_};
         auto result = log_.health();
         result.mailbox_drops = mailbox_.dropped_count();
+        if (failed_.load(std::memory_order_acquire)) {
+            result.state = HistoryStorageState::Failed;
+        }
         if (result.mailbox_drops != 0U && result.state == HistoryStorageState::Ready) {
             result.state = HistoryStorageState::Degraded;
         }
@@ -234,28 +238,36 @@ private:
         }
 
         HistoryObservation observation;
-        std::optional<HistoryObservation> pending_lifecycle;
+        HistoryWritePolicy write_policy;
         while (running_.load(std::memory_order_acquire)) {
+            bool terminal_failure = false;
             {
                 HistoryFlashLease flash_lease{flash_operations_};
-                bool have_observation = pending_lifecycle.has_value();
-                if (flash_lease && !have_observation && mailbox_.try_pop(observation)) {
-                    have_observation = true;
-                }
-                if (flash_lease && have_observation) {
-                    if (pending_lifecycle) observation = *pending_lifecycle;
+                std::optional<HistoryObservation> incoming;
+                if (flash_lease && !write_policy.has_pending_lifecycle()
+                    && mailbox_.try_pop(observation)) {
                     if (!observation.unix_utc_seconds) {
                         observation.unix_utc_seconds = synchronized_unix_utc_now();
                     }
+                    incoming = observation;
+                }
+                if (flash_lease
+                    && (write_policy.has_pending_lifecycle() || incoming)) {
                     std::lock_guard lock{mutex_};
                     log_.set_mailbox_drops(mailbox_.dropped_count());
-                    bool written = false;
-                    if (observation.kind == HistoryObservationKind::Start) {
-                        written = log_.begin_session(observation).has_value();
-                    } else {
-                        written = log_.append(observation);
-                    }
-                    if (written) {
+                    const auto result = write_policy.process(
+                        std::move(incoming),
+                        [this](const HistoryObservation& candidate) {
+                            const bool written = candidate.kind
+                                    == HistoryObservationKind::Start
+                                ? log_.begin_session(candidate).has_value()
+                                : log_.append(candidate);
+                            return HistoryWriteAttemptResult{
+                                written, log_.health().state
+                            };
+                        }
+                    );
+                    if (result == HistoryWriteCycleResult::Written) {
                         ++records_written_;
                         if (records_written_ == 1U || records_written_ % 60U == 0U) {
                             ESP_LOGI(
@@ -268,16 +280,15 @@ private:
                                 history_task_stack_size_bytes
                             );
                         }
-                        pending_lifecycle.reset();
-                    } else if (observation.kind == HistoryObservationKind::Start
-                               || observation.kind == HistoryObservationKind::End) {
-                        // A transient START failure must be retried before its
-                        // queued CHANGE/END records; otherwise END has no active
-                        // durable session and would starve every later mailbox
-                        // record. END remains retryable for the same reason.
-                        if (!pending_lifecycle) pending_lifecycle = observation;
+                    } else if (result == HistoryWriteCycleResult::TerminalFailStop) {
+                        failed_.store(true, std::memory_order_release);
+                        terminal_failure = true;
                     }
                 }
+            }
+            if (terminal_failure) {
+                ESP_LOGE(tag, "History storage FAILED; stopping flash persistence");
+                break;
             }
             static_cast<void>(ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(100)));
         }
