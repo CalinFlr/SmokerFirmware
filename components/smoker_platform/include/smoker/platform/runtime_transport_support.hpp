@@ -11,6 +11,21 @@ namespace smoker::platform {
 
 inline constexpr std::uint32_t internal_ota_correlation_id = 0xFFFFFFFEU;
 
+// Control readiness is an observable-cycle property, not an application
+// health predicate. The sole ControlTask owns this latch and supplies only the
+// two post-tick delivery/runtime results required for the one-shot transition.
+class ControlReadinessLatch final {
+public:
+    [[nodiscard]] bool observe_cycle(
+        bool snapshot_published,
+        bool watchdog_reset_succeeded
+    ) noexcept;
+    [[nodiscard]] bool ready() const noexcept;
+
+private:
+    bool ready_{false};
+};
+
 // Shared by HTTP and Blynk producers. Both sequences deliberately skip zero
 // and the internal OTA identity, including after uint32 wraparound.
 class RuntimeIdGenerator final {

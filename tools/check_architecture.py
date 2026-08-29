@@ -309,6 +309,13 @@ def check_m12_transport_contract(failures: CheckFailures) -> None:
     network_support = (
         ROOT / "components/smoker_platform/src/local_network_support.cpp"
     ).read_text()
+    runtime_support = (
+        ROOT / "components/smoker_platform/src/runtime_transport_support.cpp"
+    ).read_text()
+    runtime_support_header = (
+        ROOT
+        / "components/smoker_platform/include/smoker/platform/runtime_transport_support.hpp"
+    ).read_text()
     application = (ROOT / "components/smoker_app/src/smoker_application.cpp").read_text()
     web_assets = (ROOT / "components/smoker_platform/src/web_assets.hpp").read_text()
     decisions = (ROOT / "docs/DECISIONS.md").read_text()
@@ -334,6 +341,87 @@ def check_m12_transport_contract(failures: CheckFailures) -> None:
         and "context->snapshots.publish(snapshot)" in runtime
         and "snapshot.chamber_target" in runtime,
         "ControlTask must publish and diagnose from one immutable post-tick snapshot",
+    )
+    control_loop = source_section(
+        runtime, "void control_task(", "bool start_ordinary_runtime("
+    )
+    startup = source_section(
+        runtime,
+        "bool start_ordinary_runtime(",
+        "} // namespace smoker::platform",
+    )
+    tick_position = control_loop.find("context->application.tick();")
+    snapshot_position = control_loop.find(
+        "const auto snapshot = context->application.snapshot_view();"
+    )
+    publish_position = control_loop.find(
+        "const bool snapshot_published = context->snapshots.publish(snapshot);"
+    )
+    watchdog_position = control_loop.find(
+        "const auto watchdog_status = esp_task_wdt_reset();"
+    )
+    readiness_observation_position = control_loop.find(
+        "context->control_readiness.observe_cycle("
+    )
+    readiness_publish_position = control_loop.find(
+        "context->connectivity.mark_control_ready();"
+    )
+    watchdog_check_position = control_loop.find("ESP_ERROR_CHECK(watchdog_status);")
+    failures.require(
+        tick_position >= 0
+        and snapshot_position > tick_position
+        and publish_position > snapshot_position
+        and watchdog_position > publish_position
+        and readiness_observation_position > watchdog_position
+        and readiness_publish_position > readiness_observation_position
+        and watchdog_check_position > readiness_publish_position
+        and runtime.count("context->connectivity.mark_control_ready();") == 1
+        and "snapshot_published, watchdog_status == ESP_OK"
+            in control_loop[readiness_observation_position:readiness_publish_position]
+        and "mark_control_ready" not in startup,
+        "control readiness must be published only by ControlTask after tick, snapshot publish, and successful TWDT reset",
+    )
+    readiness_latch = source_section(
+        runtime_support,
+        "bool ControlReadinessLatch::observe_cycle(",
+        "bool ControlReadinessLatch::ready() const noexcept",
+    )
+    connectivity_readiness = source_section(
+        connectivity,
+        "    void mark_control_ready() noexcept",
+        "private:",
+    )
+    failures.require(
+        "class ControlReadinessLatch final" in runtime_support_header
+        and "bool ready_{false};" in runtime_support_header
+        and bool(readiness_latch)
+        and "ready_ || !snapshot_published || !watchdog_reset_succeeded"
+            in readiness_latch
+        and "ready_ = true;" in readiness_latch
+        and readiness_latch.count("return true;") == 1
+        and "test_control_readiness_latch" in m12_tests
+        and "bool (Latch::*)(bool, bool) noexcept" in m12_tests,
+        "the host-portable readiness latch must start false, require only publish/TWDT proofs, and emit one transition",
+    )
+    failures.require(
+        bool(connectivity_readiness)
+        and "control_ready_.store(true, std::memory_order_release);"
+            in connectivity_readiness
+        and all(
+            forbidden not in connectivity_readiness
+            for forbidden in (
+                "mutex", "nvs_", "esp_http", "cJSON", "esp_partition_",
+                "socket(", "ESP_LOG", "new ", "malloc(", "vTaskDelay("
+            )
+        )
+        and all(
+            forbidden not in readiness_latch
+            for forbidden in (
+                "mutex", "atomic", "nvs_", "http", "cJSON", "flash",
+                "socket", "ESP_LOG", "new ", "malloc(", "vTaskDelay("
+            )
+        ),
+        "the ControlTask readiness transition must remain a bounded allocation-free atomic publication without network, flash, locks, or logging",
     )
     failures.require(
         re.search(r"xTaskCreateStaticPinnedToCore\(.*?\n\s*1\s*\n\s*\);", runtime, re.DOTALL)

@@ -615,6 +615,23 @@ rejected. Installation permission cannot be obtained during `RUNNING`.
 M14 adds `session_elapsed` to both snapshot forms. It is computed from monotonic
 session points by `SmokerApplication`; history never derives duration from UTC.
 
+Control-dependent HTTP routes begin not-ready and retain their existing `503`
+behavior until the owning `ControlTask` publishes a one-shot readiness
+transition. Task creation, HTTP/Wi-Fi startup, and auxiliary-service startup are
+not evidence of control readiness. The qualifying cycle completes
+`SmokerApplication::tick()` (including synchronous safety evaluation and the
+sole final heater write), obtains `snapshot_view()`, successfully publishes it
+to `SnapshotExchange`, and successfully resets TWDT before the atomic readiness
+store. A failed snapshot publication can retry on a later cycle. A failed TWDT
+reset cannot publish readiness before the existing fail/panic path.
+
+Readiness means that a complete control result is observable, not that the
+application is fault-free or permitted to heat. A complete cycle may therefore
+publish a `FAULT` snapshot and still become ready. Wi-Fi, HTTP, history, Blynk,
+OTA availability, session status, temperature validity, fault absence, and
+heater demand are not readiness inputs. Once published, readiness is not reset
+by those auxiliary or application states; reboot constructs a new false state.
+
 ## Probe configuration ownership
 
 M5 keeps immutable device/default probe configuration separate from mutable
