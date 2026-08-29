@@ -7,7 +7,7 @@
 namespace smoker::platform {
 namespace {
 
-constexpr std::size_t ads1115_device_count = 2U;
+constexpr std::size_t ads1115_maximum_device_count = 2U;
 constexpr std::uint32_t ads1115_minimum_clock_hz = 10'000U;
 constexpr std::uint32_t ads1115_driver_maximum_clock_hz = 1'000'000U;
 
@@ -173,15 +173,22 @@ bool valid_ads1115_acquisition_configuration(
 {
     const auto devices = configuration.devices();
     const auto channels = configuration.channels();
-    if (devices.size() != ads1115_device_count || channels.empty()) return false;
+    if (devices.empty()
+        || devices.size() > ads1115_maximum_device_count
+        || channels.empty()) {
+        return false;
+    }
     if (!std::all_of(devices.begin(), devices.end(), valid_device)) return false;
-    if (!compatible_device_pair(devices[0], devices[1])) return false;
+    if (devices.size() == ads1115_maximum_device_count
+        && !compatible_device_pair(devices[0], devices[1])) {
+        return false;
+    }
     if (configuration.conversion_timeout() <= core::Duration::zero()
         || configuration.sample_maximum_age() <= core::Duration::zero()) {
         return false;
     }
 
-    std::array<bool, ads1115_device_count> device_has_channel{};
+    std::array<bool, ads1115_maximum_device_count> device_has_channel{};
     for (std::size_t index = 0U; index < channels.size(); ++index) {
         const auto& channel = channels[index];
         if (channel.device_index >= devices.size()
@@ -204,7 +211,7 @@ bool valid_ads1115_acquisition_configuration(
     }
     return std::all_of(
         device_has_channel.begin(),
-        device_has_channel.end(),
+        device_has_channel.begin() + static_cast<std::ptrdiff_t>(devices.size()),
         [](const bool present) { return present; }
     );
 }

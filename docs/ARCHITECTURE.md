@@ -98,7 +98,8 @@ Current M15, active M7, and inactive M8/M9 software implementations:
 - an active MAX31865 chamber-sensor adapter behind `IChamberSensor`, with a
   host-testable result/configuration policy, target-only SPI-bus ownership,
   exact configuration access, and a RAII backend over pinned driver 1.0.8.
-- an inactive dual-ADS1115 food-probe adapter behind `IFoodProbeSource`, with
+- an inactive staged one-or-two-ADS1115 food-probe adapter behind
+  `IFoodProbeSource`, with
   one host-testable staged acquisition owner, timestamped per-probe caches,
   mandatory injected calibration/validity, and a target-only RAII backend over
   the pinned 1.1.14 API. Production composition remains simulated.
@@ -347,12 +348,15 @@ cutoff are available and validated. No simulated result is a production tuning
 recommendation. Because the API has no `dt`, binding the call cadence and gains
 to a measured, validated real control period remains an M8 activation gate.
 
-### Inactive M9 dual-ADS1115 boundary
+### Inactive M9 staged ADS1115 boundary
 
-M9 software integration also leaves production composition unchanged. One
-`Ads1115FoodProbeSource` owns the complete channel round robin and per-channel
-cache, plus explicit `Unsynchronized`, `Idle`, or `Converting` state for each
-physical ADC. Both devices begin unsynchronized after backend initialization:
+M9 software integration accepts one or two explicitly configured devices and
+still leaves production composition unchanged. This permits an honest staged
+configuration for the one currently installed converter without fabricating a
+second address. One `Ads1115FoodProbeSource` owns the complete channel round
+robin and per-channel cache, plus explicit `Unsynchronized`, `Idle`, or
+`Converting` state for each configured physical ADC. Every configured device
+begins unsynchronized after backend initialization:
 pinned `ads111x_set_mode()` is a read-modify-write configuration transaction,
 not proof that a conversion started before an MCU-only reset has completed.
 
@@ -394,18 +398,47 @@ other probe caches remain independent. Raw ADS1115 codes are passed to a
 mandatory injected calibration/validity policy. The adapter supplies no probe
 curve, divider, voltage, temperature, calibration, or channel-purpose default.
 
-Every device record explicitly requires I2C port, SDA/SCL GPIO, clock, pull-up
-policy, and address; every channel requires probe/device mapping, mux, gain, and
-data rate. Conversion timeout and sample maximum age are also explicit. Two
-devices on one port must use the same pins/clock/pull-up policy and distinct
-addresses. Devices on separate non-overlapping buses may reuse an address.
+Configuration rejects zero or more than two devices, a channel mapped to an
+unconfigured device, and any configured device without a channel. Every device
+record explicitly requires I2C port, SDA/SCL GPIO, clock, pull-up policy, and
+address; every channel requires probe/device mapping, mux, gain, and data rate.
+Conversion timeout and sample maximum age are also explicit. Unique probe IDs
+and unique mux-per-device mappings are retained. Two devices on one port must
+use the same pins/clock/pull-up policy and distinct addresses. Devices on
+separate non-overlapping buses may reuse an address.
 
-The target-only backend owns exactly two `i2c_dev_t` descriptors and uses the
-real 1.1.14 init/free, mode, mux, gain, rate, start, busy, and value APIs.
-`ads111x_init_desc()` writes a driver-owned 1 MHz clock and creates a mutex; the
-backend replaces that clock and applies the required pull-up policy before
-`ads111x_set_mode()` performs the first I2C transaction. Production does not
-call `i2cdev_init()` or construct this backend.
+The target-only backend has fixed two-slot storage but acquires, accesses, and
+releases only the one or two explicitly configured `i2c_dev_t` descriptors. It
+uses the real 1.1.14 init/free, mode, mux, gain, rate, start, busy, and value
+APIs. `ads111x_init_desc()` writes a driver-owned 1 MHz clock and creates a
+mutex; the backend replaces that clock and applies the required pull-up policy
+before `ads111x_set_mode()` performs the first I2C transaction.
+
+A separate target-only, non-copyable `I2cdevSubsystemOwner` explicitly calls
+the real locked `i2cdev_init()` before the backend may acquire its descriptor-
+owner lease. Backend initialization rejects an inactive owner. Checked backend
+shutdown attempts every acquired descriptor and reports success only when all
+`ads111x_free_desc()` calls return `ESP_OK`, then releases its lease. Checked
+subsystem shutdown refuses while that lease remains and reports success only
+when `i2cdev_done()` returns `ESP_OK`. Locked 2.1.2 can log and swallow nested
+device/bus teardown failures during descriptor release while clearing the
+associated handles, so neither success result proves that every nested teardown
+operation succeeded or that the driver/hardware is physically quiescent.
+Destructors provide bounded best-effort cleanup in the same descriptor-before-
+subsystem order.
+
+Locked `i2cdev` 2.1.2 keeps `i2cdev_init()`'s initialized flag as a function-
+local static and does not reset it from `i2cdev_done()`. The owner therefore
+transitions permanently to released after any shutdown attempt and rejects
+same-owner same-boot reinitialization even when cleanup succeeded. This member
+state does not exclude another owner instance during the same boot; a later
+instance can receive `ESP_OK` from the stale upstream flag after the port locks
+were deleted. The inactive boundary deliberately adds no project-global mutable
+state. Future activation/composition must instead guarantee exactly one owner
+and one initialization attempt per boot, keep the backend lifetime inside that
+owner, and treat restart after any real subsystem release as unsupported unless
+a future pinned dependency proves a restartable lifecycle. Production
+constructs neither object and calls neither lifecycle API.
 
 Connected evidence does not change that composition. One ADS1115 is currently
 installed at 3.3 V on GPIO17 SDA/GPIO18 SCL, ADDR tied to GND (`0x48`),
@@ -450,6 +483,8 @@ wait up to `CONFIG_I2CDEV_TIMEOUT`, lazily create bus/device state, retry with
 internal task delays, and allocate during initialization or recovery. Host
 allocation observation and an API cross-build therefore do not prove real I2C
 latency, allocation freedom, ControlTask suitability, or physical behavior.
+Implemented ownership makes the prerequisite explicit; it does not activate
+the backend or establish any of those target properties.
 
 ## Runtime-state ownership
 

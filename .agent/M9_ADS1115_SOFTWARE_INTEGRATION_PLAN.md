@@ -1,8 +1,14 @@
-# Inactive dual-ADS1115 software integration and recovery plan
+# Inactive ADS1115 software integration and recovery plan
+
+Historical status note: this plan's original exactly-two/no-`i2cdev_init()`
+boundary is superseded by
+`.agent/M9_ADS1115_STAGED_DEVICE_OWNERSHIP_PLAN.md`. Software now accepts one or
+two configured devices and owns locked `i2cdev` explicitly, while ordinary
+production remains simulated and constructs neither target object.
 
 ## Goal
 
-Implement the smallest host-testable and ESP-IDF-cross-buildable dual-ADS1115
+Implement the smallest host-testable and ESP-IDF-cross-buildable ADS1115
 food-probe acquisition boundary while production remains on
 `SimulatedFoodProbeSource` and every unknown physical value stays mandatory
 configuration. Preserve conversion provenance across timeouts and ambiguous I2C
@@ -26,7 +32,7 @@ failures by requiring explicit per-device idle synchronization before reuse.
 
 - no PID/M8, GPIO assignment, concrete I2C bus, physical address, pull-up,
   frontend, probe curve, voltage range, temperature range, or calibration;
-- no `i2cdev_init()` call, runtime adapter construction, hardware activation,
+- no production `i2cdev_init()` call, runtime adapter construction, hardware activation,
   flashing, monitoring, provisioning, NVS work, new task, or push;
 - no claim that locked `i2cdev` latency, retry delays, mutex waits, allocation,
   or real ControlTask suitability is validated;
@@ -56,9 +62,9 @@ failures by requiring explicit per-device idle synchronization before reuse.
 
 ## Assumptions
 
-- exactly two configured ADS1115 device records represent the selected
-  converters; they may share one compatible bus or occupy genuinely separate
-  buses;
+- the original slice required exactly two configured ADS1115 records for the
+  selected converters; the staged-device plan later permits one or two so the
+  installed module can be represented without inventing the deferred one;
 - initialization-time vector/mutex/driver allocation is allowed; steady-state
   project-owned `service()` and `read()` paths must not allocate;
 - a service caller will eventually be selected only after target timing is
@@ -116,8 +122,9 @@ git status --short --untracked-files=all
 ## Implementation outcome
 
 - Added one inactive `Ads1115FoodProbeSource` round-robin sequencer and a
-  target-only `Ads1115TargetBackend`; production remains simulated and no
-  `i2cdev_init()` call or runtime service placement was added.
+  target-only `Ads1115TargetBackend`; production remains simulated. The later
+  ownership slice adds an explicit target-only `i2cdev_init()` owner but no
+  runtime service placement or production construction.
 - Remediated the conversion-provenance boundary with per-device
   `Unsynchronized`/`Idle`/`Converting` state. Initial/recovery synchronization
   discards stale results without same-step restart; ready is evaluated before

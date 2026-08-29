@@ -35,9 +35,9 @@ overstating analog, calibration, production-integration, or shutdown evidence.
 - The initial index is empty, there are no untracked files, and exactly five
   unstaged paths exist: `README.md`, `docs/DECISIONS.md`, `docs/HARDWARE.md`,
   `docs/ROADMAP.md`, and `docs/TRACEABILITY.md`.
-- The current milestone remains M6B/M9 incomplete. The dual-ADS1115 sequencer
-  and pinned backend are inactive; ordinary production composition constructs
-  `SimulatedFoodProbeSource`.
+- The current milestone remains M6B/M9 incomplete. The staged one-or-two-device
+  ADS1115 sequencer, pinned backend, and explicit i2cdev owner are inactive;
+  ordinary production composition constructs `SimulatedFoodProbeSource`.
 - One ADS1115 is installed at 3.3 V on GPIO17/GPIO18, 100 kHz, ADDR=GND
   (`0x48`), with ALERT/RDY disconnected. The second module is deferred.
 - Four divider/filter networks were maintainer-reported assembled, but only A3

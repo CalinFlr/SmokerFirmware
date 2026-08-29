@@ -1054,10 +1054,11 @@ demonstrates two ADS1115 descriptors on one bus. This is preferred to copying
 register logic into the project or depending directly on an unversioned Git
 repository.
 
-The component's wildcard support dependencies are made reproducible by the
-versioned lockfile: `esp-idf-lib/i2cdev` 2.1.2 at hash
+Direct lifecycle use makes `esp-idf-lib/i2cdev` an exact project dependency at
+version 2.1.2 and hash
 `ad8981cc64533dcaced5107d72e42bcebe79345e194e82795792af531b300ce3` and
-`esp-idf-lib/esp_idf_lib_helpers` 1.4.0 at hash
+retains its resolved `esp-idf-lib/esp_idf_lib_helpers` 1.4.0 support component
+at hash
 `689853bb8993434f9556af0f2816e808bf77b5d22100144b21f3519993daf237`.
 The selected `i2cdev` release detects ESP-IDF 6.0 and compiles against its new
 `i2c_master` driver.
@@ -1072,9 +1073,12 @@ purposes, analog conditioning, probe curves, calibration, I2C port, and GPIOs
 are documented at M6B.
 
 The inactive implementation is one `smoker_platform` acquisition owner behind
-the existing `IFoodProbeSource` port. It owns both device/channel state and
-uses one round robin plus explicit synchronization/quarantine state per ADC.
-Both devices begin unsynchronized even after successful backend initialization,
+the existing `IFoodProbeSource` port. Software accepts one or two explicitly
+configured devices, enabling honest staged integration of the one installed
+module without fabricating the deferred module's address. It owns all
+configured device/channel state and uses one round robin plus explicit
+synchronization/quarantine state per ADC. Every configured device begins
+unsynchronized even after successful backend initialization,
 because `ads111x_set_mode()` cannot prove that an externally powered ADC is
 idle after an MCU-only reset. First use and quarantine recovery require one
 successful `busy=false` observation which discards any old result and performs
@@ -1103,15 +1107,42 @@ injected calibration/validity policy must produce `Temperature`; there is no
 probe curve, divider, voltage range, temperature range, or calibration default.
 I2C port, SDA/SCL, clock, internal/external pull-up policy, address, device/
 channel/probe map, mux, gain, data rate, conversion timeout, and sample age are
-all explicit required configuration. Same-port devices require compatible bus
-configuration and distinct addresses; separate non-overlapping buses may reuse
-an address.
+all explicit required configuration. Zero or more than two devices, an
+unconfigured-device channel, or any configured device without a channel is
+invalid. Unique probe IDs and unique mux-per-device mappings remain required.
+Same-port devices require compatible bus configuration and distinct addresses;
+separate non-overlapping buses may reuse an address.
 
 The target-only RAII backend calls the real init/free, mode, mux, gain, rate,
-start, busy, and value APIs. `ads111x_init_desc()` writes 1 MHz into its public
-descriptor and creates a mutex; project configuration replaces that clock and
-sets the explicit pull-up policy before the first I2C transaction. Production
-does not call `i2cdev_init()` or instantiate the backend.
+start, busy, and value APIs for only the configured descriptor count.
+`ads111x_init_desc()` writes 1 MHz into its public descriptor and creates a
+mutex; project configuration replaces that clock and sets the explicit pull-up
+policy before the first I2C transaction.
+
+The target-only non-copyable `I2cdevSubsystemOwner` is the explicit owner of
+locked `i2cdev` 2.1.2. It calls real `i2cdev_init()` once, and the backend must
+prove that owner is active and acquire its sole descriptor-owner lease before
+descriptor initialization. Checked backend shutdown attempts every acquired
+descriptor and retains the lease unless every `ads111x_free_desc()` call returns
+`ESP_OK`. Only then may checked subsystem shutdown call real `i2cdev_done()`;
+its success means that call returned `ESP_OK`. Locked 2.1.2 logs and swallows
+nested device/bus teardown errors in descriptor cleanup while clearing the
+associated handles, so neither API-level success proves every nested teardown
+operation succeeded or physical/driver quiescence. Both destructors provide
+bounded best-effort cleanup in the same order.
+
+Reviewed 2.1.2 stores its initialized flag as a function-local static in
+`i2cdev_init()` and does not reset it in `i2cdev_done()`. One owner instance is
+initialize-once and permanently non-restartable after any release attempt, but
+ordinary member state cannot exclude a simultaneous or later owner instance.
+After release, a later instance could receive `ESP_OK` from the stale upstream
+flag even though the port locks were deleted. Adding project-global mutable
+state solely to mask that upstream lifecycle is rejected under the architecture
+default. Because the backend remains inactive, future activation/composition
+must guarantee exactly one owner and one initialization attempt per boot; any
+same-boot restart after real subsystem release is unsupported unless a future
+exact-pinned dependency demonstrates a restartable lifecycle. Production
+instantiates neither owner nor backend and calls neither lifecycle function.
 
 Subsequent staged hardware evidence does not activate that backend. On
 2026-08-25 the first of the two selected modules was wired at 3.3 V with

@@ -63,25 +63,38 @@ constexpr std::uint32_t ads1115_driver_maximum_clock_hz = 1'000'000U;
 
 } // namespace
 
+Ads1115TargetBackend::Ads1115TargetBackend(
+    I2cdevSubsystemOwner& subsystem
+) noexcept
+    : subsystem_{subsystem}
+{
+}
+
 Ads1115TargetBackend::~Ads1115TargetBackend()
 {
-    release_descriptors();
+    static_cast<void>(shutdown());
 }
 
 bool Ads1115TargetBackend::initialize(
     const std::span<const Ads1115DeviceConfiguration> devices
 ) noexcept
 {
-    release_descriptors();
-    if (devices.size() != descriptors_.size()) return false;
+    if (descriptor_owner_acquired_
+        || descriptor_count_ != 0U
+        || devices.empty()
+        || devices.size() > descriptors_.size()
+        || !subsystem_.active()) {
+        return false;
+    }
+    for (const auto& configuration : devices) {
+        if (!valid_device_configuration(configuration)) return false;
+    }
+    if (!subsystem_.acquire_descriptor_owner()) return false;
+    descriptor_owner_acquired_ = true;
+    descriptor_count_ = devices.size();
 
     for (std::size_t index = 0U; index < devices.size(); ++index) {
         const auto& configuration = devices[index];
-        if (!valid_device_configuration(configuration)) {
-            release_descriptors();
-            return false;
-        }
-
         auto& descriptor = descriptors_[index];
         descriptor = {};
         if (ads111x_init_desc(
@@ -91,7 +104,7 @@ bool Ads1115TargetBackend::initialize(
                 static_cast<gpio_num_t>(configuration.sda_gpio),
                 static_cast<gpio_num_t>(configuration.scl_gpio)
             ) != ESP_OK) {
-            release_descriptors();
+            static_cast<void>(shutdown());
             return false;
         }
         descriptor_acquired_[index] = true;
@@ -107,7 +120,7 @@ bool Ads1115TargetBackend::initialize(
         descriptor.cfg.scl_pullup_en = internal_pullups;
 
         if (ads111x_set_mode(&descriptor, ADS111X_MODE_SINGLE_SHOT) != ESP_OK) {
-            release_descriptors();
+            static_cast<void>(shutdown());
             return false;
         }
     }
@@ -118,7 +131,7 @@ bool Ads1115TargetBackend::configure_channel(
     const Ads1115ChannelConfiguration& channel
 ) noexcept
 {
-    if (channel.device_index >= descriptors_.size()
+    if (channel.device_index >= descriptor_count_
         || !descriptor_acquired_[channel.device_index]) {
         return false;
     }
@@ -137,7 +150,7 @@ bool Ads1115TargetBackend::start_conversion(
     const std::size_t device_index
 ) noexcept
 {
-    return device_index < descriptors_.size()
+    return device_index < descriptor_count_
         && descriptor_acquired_[device_index]
         && ads111x_start_conversion(&descriptors_[device_index]) == ESP_OK;
 }
@@ -147,7 +160,7 @@ bool Ads1115TargetBackend::conversion_busy(
     bool& busy
 ) noexcept
 {
-    return device_index < descriptors_.size()
+    return device_index < descriptor_count_
         && descriptor_acquired_[device_index]
         && ads111x_is_busy(&descriptors_[device_index], &busy) == ESP_OK;
 }
@@ -157,7 +170,7 @@ bool Ads1115TargetBackend::get_value(
     std::int16_t& raw_value
 ) noexcept
 {
-    return device_index < descriptors_.size()
+    return device_index < descriptor_count_
         && descriptor_acquired_[device_index]
         && ads111x_get_value(&descriptors_[device_index], &raw_value) == ESP_OK;
 }
@@ -179,14 +192,29 @@ bool Ads1115TargetBackend::valid_device_configuration(
         && device.address <= ADS111X_ADDR_SCL;
 }
 
-void Ads1115TargetBackend::release_descriptors() noexcept
+bool Ads1115TargetBackend::shutdown() noexcept
 {
-    for (std::size_t index = descriptors_.size(); index > 0U; --index) {
+    bool all_released = true;
+    for (std::size_t index = descriptor_count_; index > 0U; --index) {
         const auto descriptor_index = index - 1U;
         if (!descriptor_acquired_[descriptor_index]) continue;
-        static_cast<void>(ads111x_free_desc(&descriptors_[descriptor_index]));
-        descriptor_acquired_[descriptor_index] = false;
+        // ESP_OK proves only that ads111x_free_desc() returned ESP_OK. Locked
+        // i2cdev 2.1.2 can log and swallow nested device/bus deletion failures,
+        // clear their handles, and still return ESP_OK from this call.
+        if (ads111x_free_desc(&descriptors_[descriptor_index]) == ESP_OK) {
+            descriptor_acquired_[descriptor_index] = false;
+        } else {
+            all_released = false;
+        }
     }
+    if (all_released) {
+        descriptor_count_ = 0U;
+        if (descriptor_owner_acquired_) {
+            subsystem_.release_descriptor_owner();
+            descriptor_owner_acquired_ = false;
+        }
+    }
+    return all_released;
 }
 
 } // namespace smoker::platform

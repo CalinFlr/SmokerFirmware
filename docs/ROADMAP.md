@@ -36,7 +36,7 @@ A future item is **not permission to implement it early**.
   MAX31865 is active as the ordinary chamber source; the short target run is
   not chamber-hardware or physical-regulation qualification.
 - **M6B and M8-M10 — remaining controller product baseline:** incomplete. M8
-  and M9 have host-tested/cross-buildable PID and dual-ADS1115 software
+  and M9 have host-tested/cross-buildable PID and staged one-or-two-ADS1115 software
   boundaries. Food probes and heater remain simulated, production PID remains
   inactive, and outstanding physical qualification stays gated by M6B. Product
   V0 cannot be called complete before real output, food probes, persistence,
@@ -422,8 +422,9 @@ Definition of done:
 
 ## M9 — Real food probes
 
-Status: **Software adapter implemented but inactive — host behavior and ESP-IDF
-6.0.2 API compatibility are validated; one installed ADS1115 now has
+Status: **Software adapter and explicit i2cdev ownership implemented but
+inactive — host behavior and ESP-IDF 6.0.2 API compatibility are validated;
+one installed ADS1115 now has
 GPIO17/18, address `0x48`, connected digital evidence, and corrected
 A3-divider/jack/probe response evidence after a preserved wiring failure. A0-A2,
 module identity, `NTC100` curve/calibration/accuracy, second-device address,
@@ -463,12 +464,16 @@ session was the temporary diagnostic; repository production composition still
 uses `SimulatedFoodProbeSource`.
 
 The inactive adapter stays in `smoker_platform` behind `IFoodProbeSource`,
-without a separate sensor task. One acquisition owner retains independent
-per-device synchronization/quarantine state. Both ADCs begin unsynchronized;
+without a separate sensor task. It accepts one or two explicitly configured
+devices, which supports the one installed module without fabricating a second
+device/address. Zero or more than two devices, an unconfigured-device channel,
+and any configured device without a channel are rejected; probe IDs and muxes
+per device remain unique. One acquisition owner retains independent per-device
+synchronization/quarantine state. Every configured ADC begins unsynchronized;
 first use and recovery require a successful idle observation which discards
 any stale result and never configures/restarts in that service step. Busy or
-unknown devices are skipped so a healthy ADC progresses even when consecutive
-logical channels use the quarantined device.
+unknown devices are skipped so another configured healthy ADC progresses even
+when consecutive logical channels use the quarantined device.
 
 Only a synchronized idle device receives explicit mux/gain/rate configuration
 and single-shot start. The deadline is established after successful start. A
@@ -487,7 +492,23 @@ All buses, pins, pull-ups, addresses, mappings, mux/gain/rate values, conversion
 timeout, and sample age remain explicit configuration. Same-bus devices require
 compatible settings and distinct addresses; genuinely separate buses may reuse
 an address. The target backend overrides `ads111x_init_desc()`'s hard-coded
-1 MHz descriptor clock before the first transaction.
+1 MHz descriptor clock before the first transaction and never touches its
+unused second storage slot for a one-device configuration.
+
+A target-only non-copyable owner now calls real locked `i2cdev_init()` and must
+be active before descriptor initialization. Checked backend shutdown attempts
+all acquired descriptors and releases its subsystem lease only when every
+`ads111x_free_desc()` call returns `ESP_OK`; checked subsystem shutdown then
+reports whether real `i2cdev_done()` returned `ESP_OK`. Locked 2.1.2 can swallow
+nested device/bus deletion errors during descriptor cleanup, so neither result
+proves every nested teardown succeeded or physical/driver quiescence. Because
+2.1.2 also leaves its function-local initialized flag true, one owner instance
+rejects its own restart but cannot exclude a simultaneous or later instance.
+This ownership is compiled but remains uncomposed in ordinary production.
+Activation must provide exactly one owner/initialization per boot; restart after
+any real release remains unsupported until a future pinned dependency proves a
+restartable lifecycle. No project-global mutable state is added for this
+inactive path.
 
 Project-owned service/read code has no explicit delay, polling loop, new task,
 or steady-state allocation. Locked `i2cdev` still uses timeout-capable mutex/
@@ -503,7 +524,10 @@ constant.
 
 Requires the food-probe frontend/protocol portion of M6B.
 
-M9 remains incomplete until module manufacturer/revision and external pull-up
+M9 remains incomplete. The eventual product may still use the selected two
+converters and six probes, but the second converter/address remains deferred
+and unconfirmed and neither number becomes a universal `smoker_core` rule. M9
+cannot complete until module manufacturer/revision and external pull-up
 rail/value are recorded; actual rail and individual reference resistors are
 measured; R25 and a documented/fitted curve are established from stable,
 co-located points against a separately validated reference; A0-A2 and the

@@ -6,3 +6,4 @@ dependencies:
   espressif/pid_ctrl: "==0.3.1"
   esp-idf-lib/max31865: "==1.0.8"
   esp-idf-lib/ads111x: "==1.1.14"
+  esp-idf-lib/i2cdev: "==2.1.2"
