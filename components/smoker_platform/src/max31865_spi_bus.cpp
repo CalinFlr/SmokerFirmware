@@ -62,7 +62,6 @@ bool Max31865SpiBusOwner::initialize() noexcept
     );
     if (pull_result != ESP_OK) {
         ESP_LOGE(tag, "MAX31865 MISO pull setup failed: %s", esp_err_to_name(pull_result));
-        miso_pull_owned_ = true;
         static_cast<void>(release());
         return false;
     }

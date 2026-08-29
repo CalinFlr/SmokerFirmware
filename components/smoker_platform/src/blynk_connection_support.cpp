@@ -34,10 +34,10 @@ BlynkConnectionSnapshot BlynkConnectionBoundary::poll() noexcept
         const auto disconnect_before = disconnect_generation_.load(
             std::memory_order_acquire
         );
+        result.connected = connected_.load(std::memory_order_acquire);
         result.connection_generation = connection_generation_.load(
             std::memory_order_acquire
         );
-        result.connected = connected_.load(std::memory_order_acquire);
         const auto disconnect_after = disconnect_generation_.load(
             std::memory_order_acquire
         );
