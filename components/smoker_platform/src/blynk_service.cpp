@@ -346,7 +346,6 @@ private:
     void handle_disconnect() noexcept
     {
         projection_.disconnected();
-        mapper_.disconnected();
         results_.disconnected();
         events_.disconnected();
         pending_feedback_.reset();
@@ -446,15 +445,18 @@ private:
                 continue;
             }
             if (!connection_boundary_.usable(connection)) break;
-            const bool start = inbound.datastream_view() == "CmdStart"
-                && inbound.payload_view() == "1";
+            // Parsing remains single-sourced in BlynkCommandMapper. A malformed
+            // atomic request can therefore leave an intentional gap in the
+            // internal session-ID sequence without admitting any command.
+            const bool start = inbound.datastream_view() == "CmdStartRequest";
             const auto session_id = start ? ids_.next_session() : 1U;
             auto mapped = mapper_.map(
                 inbound.datastream_view(), inbound.payload_view(), session_id
             );
             if (!connection_boundary_.usable(connection)) break;
-            if (mapped.decision == BlynkCommandDecision::Malformed) {
-                events_.queue(BlynkEventType::RemoteError, "malformed remote command");
+            const auto protocol_error = blynk_command_error_message(mapped.decision);
+            if (!protocol_error.empty()) {
+                events_.queue(BlynkEventType::RemoteError, protocol_error);
                 continue;
             }
             if (mapped.decision != BlynkCommandDecision::Accepted) continue;

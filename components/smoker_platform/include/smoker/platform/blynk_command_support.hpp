@@ -20,6 +20,7 @@ enum class BlynkCommandDecision : std::uint8_t {
     Accepted,
     Ignored,
     Malformed,
+    Deprecated,
 };
 
 enum class BlynkFirmwareOperation : std::uint8_t {
@@ -74,9 +75,11 @@ struct BlynkMappedCommand final {
     BlynkFirmwareOperation firmware_operation{BlynkFirmwareOperation::None};
 };
 
-// Deterministic fixed-buffer command translation. Decimal parsing accepts only
-// an optional minus sign, decimal digits, and at most one decimal point; it
-// does not depend on floating-point from_chars support on Xtensa.
+// Deterministic fixed-buffer command translation. Atomic Start payloads and
+// temperatures are parsed without retained cross-message state. Decimal
+// parsing accepts only an optional minus sign, decimal digits, and at most one
+// decimal point; it does not depend on floating-point from_chars support on
+// Xtensa.
 class BlynkCommandMapper final {
 public:
     explicit BlynkCommandMapper(core::Recipe startup_recipe) noexcept;
@@ -86,13 +89,15 @@ public:
         std::string_view payload,
         core::SessionId start_session_id
     ) noexcept;
-    void disconnected() noexcept;
 
 private:
     core::Recipe startup_recipe_;
-    std::optional<core::Temperature> pending_start_target_;
-    bool pending_start_target_set_{false};
 };
+
+// Empty means the decision does not require remote protocol-error feedback.
+[[nodiscard]] std::string_view blynk_command_error_message(
+    BlynkCommandDecision decision
+) noexcept;
 
 [[nodiscard]] bool is_blynk_control_datastream(
     std::string_view datastream

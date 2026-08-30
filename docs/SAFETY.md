@@ -355,3 +355,12 @@ every disconnect. Token loss, broker failure, quota exhaustion, notification
 failure, and stale cloud visualization fail remote access, not local control.
 Target validation with simulated inputs is not evidence that remote heating of
 the final appliance is electrically or thermally safe.
+
+A remote Start request and its optional target cross MQTT as one bounded
+`CmdStartRequest` message and become one ordinary `StartSessionCommand` only
+after complete parsing. The deprecated two-message `CmdStartTargetC` plus
+`CmdStart` protocol fails closed with remote-protocol error feedback and cannot
+configure or submit Start. Neither path can command the heater directly:
+application semantic validation, synchronous safety, and the final heater gate
+remain authoritative. Host tests and cross-builds of this protocol are not
+hardware-safety validation.

@@ -283,15 +283,20 @@ python3 tools/provision_blynk.py --port /dev/cu.usbserial-XXXX clear
 ```
 
 The versioned NVS blob is unencrypted in M15, so physical extraction remains
-possible. Missing/invalid credentials disable only Blynk. The exact 26
-datastreams, five event codes, and minimal mobile dashboard are defined in
+possible. Missing/invalid credentials disable only Blynk. The exact active
+contract of 25 datastreams (16 outputs and nine controls), five event codes, and
+minimal mobile dashboard are defined in
 [`docs/BLYNK_TEMPLATE.md`](docs/BLYNK_TEMPLATE.md). The KFB003 UART provisioning
-and credential persistence across a signed reboot have passed, and the Blynk
-Console template/device, events, and 22-widget web dashboard are configured.
+and credential persistence across a signed reboot have passed. The historical
+Blynk Console template/device, events, and 22-widget web dashboard used the
+former two-message Start protocol. The owner must perform the documented manual
+Console migration to `CmdStartRequest` before installing this firmware; the
+repository change does not modify Console.
 The provisioned KFB003 has also passed live home-STA association, Blynk TLS and
-online status, simulated Start/Stop with correlated acceptance, heater-OFF
-after Stop, reboot reconnect without Start replay, the M13 firmware-check
-request (`UP_TO_DATE`), and remote-error e-mail delivery. Phone push receipt,
+online status, the historical legacy simulated Start/Stop flow with correlated
+acceptance, heater-OFF after Stop, reboot reconnect without Start replay, the
+M13 firmware-check request (`UP_TO_DATE`), and remote-error e-mail delivery.
+Phone push receipt,
 exact broker-side throttle/silence measurement, deliberate transport loss, and
 the native mobile-app dashboard remain pending; the local controller continues
 without Blynk while STA is unavailable.
@@ -681,9 +686,11 @@ hardware-safety test. The signed M14 partition migration, NVS preservation,
 minute-sample history, live target/alarm change, and reboot reconstruction also
 passed with simulated I/O; deliberate Wi-Fi-loss-during-RUNNING remains open.
 M15 UART provisioning and on-board NVS persistence across a signed reboot have
-passed on KFB003. The owner Console template/device, 26 datastreams, five events,
-and 22-widget web dashboard are configured. Live home-STA/TLS/online status,
-simulated Start/Stop with heater-OFF after Stop, reboot reconnect/no-Start-replay,
+passed on KFB003. The historical owner Console template/device used 26
+datastreams and a 22-widget web dashboard; the new 25-datastream atomic Start
+contract requires the documented manual owner migration and is not modified by
+this repository PR. Live home-STA/TLS/online status, legacy simulated Start/Stop
+with heater-OFF after Stop, reboot reconnect/no-Start-replay,
 remote-error e-mail delivery, and a Blynk-triggered M13 firmware check passed.
 Phone push receipt, exact broker timing/silence, deliberate transport loss, and
 native mobile-dashboard validation remain open.

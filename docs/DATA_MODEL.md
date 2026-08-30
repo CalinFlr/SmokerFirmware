@@ -468,10 +468,12 @@ likewise not application runtime state.
 
 Blynk control datastreams represent live user gestures, not desired-state
 ownership. They map only to the existing external command set or to the
-existing M13 firmware check/install request. Start and OTA-install controls are
-never read back or synchronized after reconnect. A firmware request contains
-an operation and correlation identity only; it contains no URL, image, signing
-key, or heater command.
+existing M13 firmware check/install request. Remote Start carries its intent and
+optional chamber target in one bounded message which constructs one
+`StartSessionCommand`; no cross-message target is retained. Start and
+OTA-install controls are never read back or synchronized after reconnect. A
+firmware request contains an operation and correlation identity only; it
+contains no URL, image, signing key, or heater command.
 
 ## Persistence groups
 

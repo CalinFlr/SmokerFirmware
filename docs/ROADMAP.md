@@ -55,9 +55,11 @@ A future item is **not permission to implement it early**.
   and stack/runtime validation; deliberate Wi-Fi loss remains pending.
 - **M15 — personal Blynk remote access:** implemented for host and ESP-IDF
   cross-build validation. One owner controls one home smoker through Blynk's
-  existing app and MQTT/TLS service. KFB003 provisioning, live home-STA/TLS,
-  status, simulated Start/Stop, reboot no-replay, remote-error e-mail, and
-  firmware-check scenarios passed; native mobile UI, phone push, exact broker
+  existing app and MQTT/TLS service. Remote Start now uses one atomic bounded
+  request and rejects the former two-message protocol. KFB003 provisioning,
+  live home-STA/TLS, status, legacy simulated Start/Stop, reboot no-replay,
+  remote-error e-mail, and firmware-check scenarios passed; manual Console
+  migration to the atomic control, native mobile UI, phone push, exact broker
   timing, and deliberate transport-loss scenarios remain target-pending.
 
 Rule-level implementation and validation evidence is in
@@ -800,10 +802,11 @@ safety.
 
 ## M15 — Personal Blynk remote access
 
-Status: **Implemented in software — host/cross-build and Blynk Console
-validated; KFB003 provisioning, live TLS/status/commands, reboot no-replay, and
-firmware check plus remote-error e-mail delivery passed; native mobile/phone
-push and remaining broker/outage scenarios pending.**
+Status: **Implemented in software — host/cross-build validated; the previous
+Console protocol and KFB003 provisioning/live TLS/status/commands/reboot
+no-replay/firmware-check/remote-error e-mail paths passed. Atomic Start Console
+migration is manual and pending; native mobile/phone push and remaining
+broker/outage scenarios are also pending.**
 
 M15 provides private remote operation for one owner and one home smoker by
 using the existing Blynk mobile application and Blynk Cloud's standard Device
@@ -818,7 +821,8 @@ artifacts, or documentation evidence.
 M15 scope:
 
 - use the official ESP-MQTT component and Blynk Device MQTT API over TLS;
-- map Blynk controls to the existing external command set: Start, Stop,
+- map Blynk controls to the existing external command set: atomic one-message
+  Start with an optional target, Stop,
   chamber/probe settings, alarm acknowledgement, resolved-fault clear, and a
   user-requested firmware check/install;
 - return correlated semantic command acceptance/rejection instead of treating
@@ -856,6 +860,12 @@ must not replay or synchronize a retained Start/OTA control value; a new user
 gesture is required. Every command retains the same validation, safety gate,
 and application semantics as its local equivalent.
 
+`CmdStartRequest` carries exactly `1` or `1,<target_celsius>` and constructs one
+`StartSessionCommand` only after full strict parsing. `CmdStart` and
+`CmdStartTargetC` are deprecated rejection-only names; they cannot retain a
+target or enter the application mailbox. The active contract is 16 outputs plus
+nine controls (25 datastreams), and owner Console migration remains manual.
+
 M15 does not upload or backfill M14 raw history. Blynk datastream retention is
 an auxiliary visualization cache, not the authoritative durable session log.
 Loss of Blynk, Internet, MQTT, credentials, notifications, or quota cannot
@@ -866,9 +876,10 @@ Definition of done:
 - host tests cover normalized-projection equality, first-connect publication,
   five-second throttling, coalescing, silence without change, and immediate
   event/command-result separation;
-- host/concurrency tests cover command mapping, correlated results, no retained
-  Start/OTA replay, bounded saturation, and control independence from a stalled
-  or disconnected Blynk transport;
+- host/concurrency tests cover strict atomic Start mapping, legacy fail-closed
+  feedback, correlated results, no retained Start/OTA replay, bounded
+  saturation, and control independence from a stalled or disconnected Blynk
+  transport;
 - architecture guardrails keep Blynk/MQTT out of `smoker_core` and prevent
   network callbacks from submitting directly or writing heater output;
 - ESP-IDF 6.0.2 strict-C++20 build, dependency, stack, image-size, and task/core

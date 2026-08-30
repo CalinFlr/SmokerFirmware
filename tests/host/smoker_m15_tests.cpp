@@ -13,8 +13,10 @@
 #include <cassert>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <new>
 #include <optional>
 #include <span>
 #include <string>
@@ -23,10 +25,70 @@
 #include <variant>
 #include <vector>
 
+namespace allocation_probe {
+
+std::atomic_bool enabled{false};
+std::atomic_size_t allocations{0U};
+
+void begin() noexcept
+{
+    allocations.store(0U, std::memory_order_relaxed);
+    enabled.store(true, std::memory_order_relaxed);
+}
+
+std::size_t end() noexcept
+{
+    enabled.store(false, std::memory_order_relaxed);
+    return allocations.load(std::memory_order_relaxed);
+}
+
+} // namespace allocation_probe
+
+void* operator new(const std::size_t size)
+{
+    if (allocation_probe::enabled.load(std::memory_order_relaxed)) {
+        allocation_probe::allocations.fetch_add(1U, std::memory_order_relaxed);
+    }
+    if (void* const memory = std::malloc(size)) return memory;
+    std::abort();
+}
+
+void* operator new[](const std::size_t size)
+{
+    return ::operator new(size);
+}
+
+void operator delete(void* const memory) noexcept
+{
+    std::free(memory);
+}
+
+void operator delete[](void* const memory) noexcept
+{
+    ::operator delete(memory);
+}
+
+void operator delete(void* const memory, std::size_t) noexcept
+{
+    ::operator delete(memory);
+}
+
+void operator delete[](void* const memory, std::size_t) noexcept
+{
+    ::operator delete[](memory);
+}
+
 namespace {
 
 using smoker::platform::BlynkRemoteProjection;
 using smoker::platform::BlynkRemoteStatus;
+
+template <typename Mapper>
+concept HasDisconnectCleanup = requires(Mapper& mapper) {
+    mapper.disconnected();
+};
+
+static_assert(!HasDisconnectCleanup<smoker::platform::BlynkCommandMapper>);
 
 smoker::core::Temperature temperature(const float value)
 {
@@ -167,16 +229,6 @@ void test_status_timer_normalization_and_serializer_budget()
 void test_allowlisted_deterministic_command_mapping()
 {
     smoker::platform::BlynkCommandMapper mapper{recipe()};
-    const auto target_update = mapper.map("CmdStartTargetC", "125.0", 1U);
-    assert(target_update.decision == smoker::platform::BlynkCommandDecision::Accepted);
-    assert(!target_update.command.has_value());
-
-    const auto start = mapper.map("CmdStart", "1", 44U);
-    const auto* const start_command = std::get_if<smoker::app::StartSessionCommand>(
-        &*start.command
-    );
-    assert(start_command != nullptr && start_command->session_id == 44U);
-    assert(start_command->recipe.stage.chamber_target->celsius() == 125.0F);
     const auto stop = mapper.map("CmdStop", "1", 1U);
     const auto chamber = mapper.map("CmdChamberTargetC", "-273.1", 1U);
     const auto probe_target = mapper.map("CmdProbeTarget", "255,75.125", 1U);
@@ -212,15 +264,135 @@ void test_allowlisted_deterministic_command_mapping()
         == smoker::platform::BlynkCommandDecision::Ignored);
     assert(mapper.map("Unknown", "1", 1U).decision
         == smoker::platform::BlynkCommandDecision::Ignored);
+}
 
-    assert(mapper.map("CmdStartTargetC", "130.0", 1U).decision
+void test_atomic_start_mapping_and_strict_parser()
+{
+    smoker::platform::BlynkCommandMapper mapper{recipe()};
+
+    const auto implicit = mapper.map("CmdStartRequest", "1", 44U);
+    const auto* const implicit_start = std::get_if<smoker::app::StartSessionCommand>(
+        &*implicit.command
+    );
+    assert(implicit.decision == smoker::platform::BlynkCommandDecision::Accepted);
+    assert(implicit_start != nullptr && implicit_start->session_id == 44U);
+    assert(implicit_start->recipe.stage.chamber_target->celsius() == 110.0F);
+
+    const auto explicit_target = mapper.map("CmdStartRequest", "1,125.0", 45U);
+    const auto* const explicit_start = std::get_if<smoker::app::StartSessionCommand>(
+        &*explicit_target.command
+    );
+    assert(explicit_target.decision
         == smoker::platform::BlynkCommandDecision::Accepted);
-    mapper.disconnected();
-    const auto after_disconnect = mapper.map("CmdStart", "1", 45U);
-    const auto* const disconnected_start =
-        std::get_if<smoker::app::StartSessionCommand>(&*after_disconnect.command);
-    assert(disconnected_start != nullptr);
-    assert(disconnected_start->recipe.stage.chamber_target->celsius() == 110.0F);
+    assert(explicit_start != nullptr && explicit_start->session_id == 45U);
+    assert(explicit_start->recipe.stage.chamber_target->celsius() == 125.0F);
+
+    const auto monitoring = mapper.map("CmdStartRequest", "1,-273.1", 46U);
+    const auto* const monitoring_start = std::get_if<smoker::app::StartSessionCommand>(
+        &*monitoring.command
+    );
+    assert(monitoring.decision == smoker::platform::BlynkCommandDecision::Accepted);
+    assert(monitoring_start != nullptr && monitoring_start->session_id == 46U);
+    assert(!monitoring_start->recipe.stage.chamber_target.has_value());
+
+    // Each request is complete in itself: neither explicit form can influence
+    // the following startup-recipe form.
+    const auto independent = mapper.map("CmdStartRequest", "1", 47U);
+    const auto* const independent_start =
+        std::get_if<smoker::app::StartSessionCommand>(&*independent.command);
+    assert(independent_start != nullptr);
+    assert(independent_start->recipe.stage.chamber_target->celsius() == 110.0F);
+
+    constexpr std::array<std::string_view, 11U> malformed_requests{
+        "", "0", "2", "1,", ",110", "1,110,120", "1, 110", "1,+110",
+        "1,1e2", "start,110", "1,nan",
+    };
+    for (const auto payload : malformed_requests) {
+        allocation_probe::begin();
+        const auto mapped = mapper.map("CmdStartRequest", payload, 99U);
+        const auto allocations = allocation_probe::end();
+        assert(mapped.decision == smoker::platform::BlynkCommandDecision::Malformed);
+        assert(!mapped.command.has_value());
+        assert(allocations == 0U);
+    }
+}
+
+void test_legacy_start_protocol_fails_closed()
+{
+    smoker::platform::BlynkCommandMapper mapper{recipe()};
+    const auto legacy_target = mapper.map("CmdStartTargetC", "125.0", 1U);
+    const auto legacy_start = mapper.map("CmdStart", "1", 2U);
+    assert(legacy_target.decision
+        == smoker::platform::BlynkCommandDecision::Deprecated);
+    assert(legacy_start.decision
+        == smoker::platform::BlynkCommandDecision::Deprecated);
+    assert(!legacy_target.command.has_value() && !legacy_start.command.has_value());
+
+    const auto atomic = mapper.map("CmdStartRequest", "1", 48U);
+    const auto* const atomic_start =
+        std::get_if<smoker::app::StartSessionCommand>(&*atomic.command);
+    assert(atomic_start != nullptr && atomic_start->session_id == 48U);
+    assert(atomic_start->recipe.stage.chamber_target->celsius() == 110.0F);
+
+    const auto explicit_atomic = mapper.map("CmdStartRequest", "1,130.0", 49U);
+    const auto* const explicit_start =
+        std::get_if<smoker::app::StartSessionCommand>(&*explicit_atomic.command);
+    assert(explicit_start != nullptr);
+    assert(explicit_start->recipe.stage.chamber_target->celsius() == 130.0F);
+}
+
+void test_atomic_start_feedback_and_correlation()
+{
+    smoker::platform::BlynkCommandMapper mapper{recipe()};
+    smoker::platform::BlynkEventScheduler events;
+    smoker::platform::BlynkCommandResults results;
+
+    const auto malformed = mapper.map("CmdStartRequest", "1,+110", 70U);
+    const auto deprecated = mapper.map("CmdStart", "1", 71U);
+    assert(!malformed.command.has_value() && !deprecated.command.has_value());
+    const auto malformed_message = smoker::platform::blynk_command_error_message(
+        malformed.decision
+    );
+    const auto deprecated_message = smoker::platform::blynk_command_error_message(
+        deprecated.decision
+    );
+    assert(malformed_message == "malformed remote command");
+    assert(deprecated_message == "deprecated remote start protocol");
+    assert(malformed_message.size() < 160U && deprecated_message.size() < 160U);
+    events.queue(smoker::platform::BlynkEventType::RemoteError, malformed_message);
+    events.queue(smoker::platform::BlynkEventType::RemoteError, deprecated_message);
+    const auto remote_error = events.pending_publish(0);
+    assert(remote_error.has_value());
+    assert(std::string_view{remote_error->description.data()}
+        == "deprecated remote start protocol");
+    assert(results.pending_count() == 0U);
+
+    const auto mapped = mapper.map("CmdStartRequest", "1,125.0", 72U);
+    assert(mapped.decision == smoker::platform::BlynkCommandDecision::Accepted);
+    smoker::app::SpscCommandMailbox application_mailbox;
+    constexpr std::uint32_t correlation = 700U;
+    constexpr std::uint32_t generation = 9U;
+    assert(application_mailbox.push(*mapped.command, correlation, generation)
+        == smoker::app::MailboxAdmission::Accepted);
+    assert(results.track(correlation));
+
+    smoker::app::Command admitted;
+    std::uint32_t admitted_correlation = 0U;
+    std::uint32_t admitted_generation = 0U;
+    assert(application_mailbox.try_pop(
+        admitted, &admitted_correlation, &admitted_generation
+    ));
+    assert(std::get_if<smoker::app::StartSessionCommand>(&admitted) != nullptr);
+    assert(admitted_correlation == correlation && admitted_generation == generation);
+    const std::array semantic_result{
+        smoker::app::CommandResultView{correlation, true},
+    };
+    results.observe(semantic_result);
+    const auto feedback = results.pop();
+    assert(feedback.has_value());
+    assert(feedback->kind == smoker::platform::BlynkCommandResultKind::SemanticAccepted);
+    assert(smoker::platform::serialize_blynk_command_feedback(*feedback).view()
+        == "700:accepted");
 }
 
 void test_raw_mailbox_stop_reservation_and_concurrency()
@@ -230,7 +402,7 @@ void test_raw_mailbox_stop_reservation_and_concurrency()
         assert(mailbox.push("CmdAcknowledgeAlarm", "1")
             == smoker::platform::BlynkInboundAdmission::Accepted);
     }
-    assert(mailbox.push("CmdStart", "1")
+    assert(mailbox.push("CmdStartRequest", "1")
         == smoker::platform::BlynkInboundAdmission::Full);
     assert(mailbox.push("CmdStop", "1")
         == smoker::platform::BlynkInboundAdmission::Accepted);
@@ -243,6 +415,16 @@ void test_raw_mailbox_stop_reservation_and_concurrency()
     std::size_t count = 0U;
     while (mailbox.try_pop(command)) ++count;
     assert(count == smoker::platform::blynk_inbound_capacity);
+
+    smoker::platform::BlynkInboundMailbox allowlist;
+    assert(allowlist.push("CmdStartRequest", "1,110.0")
+        == smoker::platform::BlynkInboundAdmission::Accepted);
+    assert(allowlist.push("CmdStart", "1")
+        == smoker::platform::BlynkInboundAdmission::Accepted);
+    assert(allowlist.push("CmdStartTargetC", "110.0")
+        == smoker::platform::BlynkInboundAdmission::Accepted);
+    assert(allowlist.push("ArbitraryTopic", "1")
+        == smoker::platform::BlynkInboundAdmission::Ignored);
 
     smoker::platform::BlynkInboundMailbox concurrent;
     std::atomic_bool ordered{true};
@@ -277,12 +459,10 @@ void test_disconnect_reconnect_boundary_discards_old_connection_state()
     assert(boundary.usable(first_connection));
 
     smoker::platform::BlynkInboundMailbox inbound;
-    assert(inbound.push("CmdStart", "1", first_generation)
+    assert(inbound.push("CmdStartRequest", "1,130.0", first_generation)
         == smoker::platform::BlynkInboundAdmission::Accepted);
 
     smoker::platform::BlynkCommandMapper mapper{recipe()};
-    assert(mapper.map("CmdStartTargetC", "130.0", 1U).decision
-        == smoker::platform::BlynkCommandDecision::Accepted);
     smoker::platform::BlynkCommandResults results;
     assert(results.track(41U));
     const std::array old_result{smoker::app::CommandResultView{41U, true}};
@@ -296,7 +476,7 @@ void test_disconnect_reconnect_boundary_discards_old_connection_state()
         assert(saturated.push("CmdAcknowledgeAlarm", "1", first_generation)
             == smoker::platform::BlynkInboundAdmission::Accepted);
     }
-    assert(saturated.push("CmdStart", "1", first_generation)
+    assert(saturated.push("CmdStartRequest", "1", first_generation)
         == smoker::platform::BlynkInboundAdmission::Full);
     std::uint32_t observed_drops = 0U;
 
@@ -304,7 +484,7 @@ void test_disconnect_reconnect_boundary_discards_old_connection_state()
     const auto second_generation = boundary.callback_connected();
     // A genuinely new command can already be queued before the consumer sees
     // the collapsed disconnect/reconnect pair.
-    assert(inbound.push("CmdStart", "1", second_generation)
+    assert(inbound.push("CmdStartRequest", "1", second_generation)
         == smoker::platform::BlynkInboundAdmission::Accepted);
 
     const auto reconnected = boundary.poll();
@@ -316,14 +496,13 @@ void test_disconnect_reconnect_boundary_discards_old_connection_state()
 
     // These are the platform-neutral parts of handle_disconnect(). The ESP-IDF
     // integration is guarded separately because blynk_service.cpp is target-only.
-    mapper.disconnected();
     results.disconnected();
     events.disconnected();
     observed_drops = saturated.dropped_count();
     assert(!results.pop().has_value() && results.pending_count() == 0U);
     assert(!events.pending_publish(100'000).has_value());
     assert(observed_drops == saturated.dropped_count());
-    assert(saturated.push("CmdStart", "1", second_generation)
+    assert(saturated.push("CmdStartRequest", "1", second_generation)
         == smoker::platform::BlynkInboundAdmission::Full);
     // Only the old-generation watermark was acknowledged. A real drop from
     // the new generation remains distinguishable and reportable.
@@ -345,8 +524,8 @@ void test_disconnect_reconnect_boundary_discards_old_connection_state()
             &*mapped.command
         );
         assert(start != nullptr);
-        // The old connection's one-shot target must not parameterize this new
-        // live Start.
+        // The old atomic request is discarded as a unit; the new live request
+        // independently uses the startup recipe.
         assert(start->recipe.stage.chamber_target->celsius() == 110.0F);
         ++accepted;
     }
@@ -675,6 +854,9 @@ int main()
     test_projection_connect_throttle_coalescing_and_retry();
     test_status_timer_normalization_and_serializer_budget();
     test_allowlisted_deterministic_command_mapping();
+    test_atomic_start_mapping_and_strict_parser();
+    test_legacy_start_protocol_fails_closed();
+    test_atomic_start_feedback_and_correlation();
     test_raw_mailbox_stop_reservation_and_concurrency();
     test_disconnect_reconnect_boundary_discards_old_connection_state();
     test_control_is_independent_of_blynk_transport();

@@ -10,8 +10,8 @@ not provide a heater command.
 The firmware uses Blynk Device MQTT over TLS with a clean session. It publishes
 the first 15 status fields below together in one `batch_ds` payload.
 `LastCommandResult` is the sixteenth output datastream but is published
-separately and is never part of change-throttled status. Together with the ten
-controls, the template has exactly 26 datastreams. The names are part of the
+separately and is never part of change-throttled status. Together with the nine
+controls, the template has exactly 25 datastreams. The names are part of the
 wire contract; rename neither a Blynk datastream nor its data type without a
 coordinated firmware change.
 
@@ -43,10 +43,11 @@ field is capped by the MQTT message budget. The six-probe display cap is a
 Blynk-template/UI bound, not a `smoker_core` product capacity rule; omitted
 probes remain available to local control and local UI.
 
-The `-273.1` sentinel is outside the accepted domain temperature range and is
-used only because Blynk numeric datastreams cannot carry JSON `null` in a
-`batch_ds` value. The app must label it as unavailable/monitoring-only; it is
-never a command value.
+The `-273.1` sentinel is outside the accepted domain temperature range. Status
+uses it because Blynk numeric datastreams cannot carry JSON `null` in a
+`batch_ds` value; command payloads use it to request an absent optional target.
+It maps immediately to `std::nullopt` and is never stored as a domain
+temperature.
 
 `FirmwareAvailableVersion` is the mobile-friendly firmware display: it contains
 the available release tag while `FirmwareState` is `AVAILABLE`, `Latest` while
@@ -62,8 +63,7 @@ request, or restore any control datastream, including after reconnect.
 
 | Datastream name | Type / accepted payload | Resulting existing operation |
 |---|---|---|
-| `CmdStart` | Integer `1` | `StartSessionCommand` with the submitted `CmdStartTargetC` value |
-| `CmdStartTargetC` | Double, valid chamber target or `-273.1` | one-shot parameter for the next `CmdStart`; never applied alone |
+| `CmdStartRequest` | String `1` or `1,<target_celsius>` | one atomic `StartSessionCommand`; `1` uses the startup recipe, an explicit target replaces its chamber target, and `-273.1` selects monitoring-only |
 | `CmdStop` | Integer `1` | `StopSessionCommand` |
 | `CmdChamberTargetC` | Double, valid target or `-273.1` | `SetChamberTargetCommand`; sentinel clears the target |
 | `CmdProbeTarget` | String `probe_id,target_celsius` | `SetProbeTargetCommand`; target `-273.1` clears it |
@@ -73,12 +73,49 @@ request, or restore any control datastream, including after reconnect.
 | `CmdClearResolvedFault` | Integer `1` | `ClearResolvedFaultCommand` |
 | `CmdFirmware` | Integer `1` check, `2` install | existing M13 check/install request only |
 
+`CmdStartRequest` accepts exactly `1` or `1,<target_celsius>`. The target uses
+the existing strict decimal parser: optional minus, decimal digits, and at most
+one decimal point. Whitespace, plus signs, exponents, NaN/infinity, locale
+separators, empty fields, a prefix other than `1`, multiple commas, and extra
+fields are malformed. The mapper retains no parameter from one message for a
+later Start, and the payload is not JSON.
+
 Every accepted transport request receives a locally generated nonzero 32-bit
 correlation ID. `LastCommandResult` is updated only when the immutable
 application snapshot reports its semantic result. A full mailbox, malformed
 payload, or unsupported value is reported as bounded remote feedback; it is
-not reported as a successful smoker operation. `CmdStart` and `CmdFirmware=2`
-are never replayed from a stored/synchronized value after reconnect.
+not reported as a successful smoker operation. `CmdStartRequest` and
+`CmdFirmware=2` are never replayed from a stored/synchronized value after
+reconnect. Parsing stays single-sourced in the mapper, so a malformed
+`CmdStartRequest` may consume an internal session ID; session IDs may therefore
+contain gaps, but no malformed command or correlation reaches the application.
+
+## Deprecated Start protocol
+
+`CmdStart` and `CmdStartTargetC` are recognized only for explicit fail-closed
+rejection. Neither belongs to the active template contract. Neither can create
+or parameterize a command, their former two-message sequence cannot start a
+session, and no legacy target is retained. Each received legacy message emits a
+bounded `smoker_remote_error` describing the deprecated protocol; it never
+produces semantic-success feedback or enters the application mailbox.
+
+## Manual Blynk Console migration
+
+This repository change does not modify Blynk Console. The owner must migrate
+the template manually in this safe order:
+
+1. Create `CmdStartRequest` with Blynk type String.
+2. Set **Sync with latest server value disabled** for the new datastream.
+3. Configure the Start UI action to send `1` or `1,<target_celsius>` as one
+   message.
+4. Remove or disable the widgets for `CmdStart` and `CmdStartTargetC`.
+5. Only then install firmware containing the atomic protocol.
+
+This order is fail-closed across a version mismatch: old firmware ignores the
+new `CmdStartRequest`, while new firmware explicitly rejects both old Start
+datastreams. Neither mismatch can accidentally start a session. All nine active
+controls must retain **Sync with latest server value disabled**; do not add a
+retained publish, `get/ds`, synchronization, or replay during migration.
 
 ## Events
 
@@ -125,7 +162,7 @@ evidence.
 
 The one-owner Blynk mobile dashboard shows session/fault state, chamber current
 and target, heater demand, timer state/elapsed time, probe summary, alarm count,
-firmware state/progress, and the latest command result. It exposes the ten live
+firmware state/progress, and the latest command result. It exposes the nine live
 controls above for Start/Stop, configuration, alarm/fault actions, and M13 OTA
 check/install. Template/device creation, widgets, event notifications, and
 datastream **Sync with latest server value disabled** are console-side setup;

@@ -10,9 +10,8 @@
 namespace smoker::platform {
 namespace {
 
-constexpr std::array<std::string_view, 10U> control_datastreams{
-    "CmdStart",
-    "CmdStartTargetC",
+constexpr std::array<std::string_view, 9U> active_control_datastreams{
+    "CmdStartRequest",
     "CmdStop",
     "CmdChamberTargetC",
     "CmdProbeTarget",
@@ -21,6 +20,11 @@ constexpr std::array<std::string_view, 10U> control_datastreams{
     "CmdAcknowledgeAlarm",
     "CmdClearResolvedFault",
     "CmdFirmware",
+};
+
+constexpr std::array<std::string_view, 2U> deprecated_control_datastreams{
+    "CmdStart",
+    "CmdStartTargetC",
 };
 
 [[nodiscard]] bool is_one(const std::string_view payload) noexcept
@@ -150,9 +154,29 @@ constexpr std::array<std::string_view, 10U> control_datastreams{
 
 bool is_blynk_control_datastream(const std::string_view datastream) noexcept
 {
-    return std::find(
-        control_datastreams.begin(), control_datastreams.end(), datastream
-    ) != control_datastreams.end();
+    const auto contains = [datastream](const auto& datastreams) {
+        return std::find(
+            datastreams.begin(), datastreams.end(), datastream
+        ) != datastreams.end();
+    };
+    return contains(active_control_datastreams)
+        || contains(deprecated_control_datastreams);
+}
+
+std::string_view blynk_command_error_message(
+    const BlynkCommandDecision decision
+) noexcept
+{
+    switch (decision) {
+    case BlynkCommandDecision::Malformed:
+        return "malformed remote command";
+    case BlynkCommandDecision::Deprecated:
+        return "deprecated remote start protocol";
+    case BlynkCommandDecision::Accepted:
+    case BlynkCommandDecision::Ignored:
+        return {};
+    }
+    return {};
 }
 
 std::string_view BlynkInboundCommand::datastream_view() const noexcept
@@ -248,25 +272,32 @@ BlynkMappedCommand BlynkCommandMapper::map(
     const core::SessionId start_session_id
 ) noexcept
 {
-    if (datastream == "CmdStartTargetC") {
-        bool valid = false;
-        const auto target = parse_temperature(payload, valid);
-        if (!valid) {
-            return malformed();
-        }
-        pending_start_target_ = target;
-        pending_start_target_set_ = true;
-        return {BlynkCommandDecision::Accepted, std::nullopt, BlynkFirmwareOperation::None};
+    if (datastream == "CmdStart" || datastream == "CmdStartTargetC") {
+        return {
+            BlynkCommandDecision::Deprecated,
+            std::nullopt,
+            BlynkFirmwareOperation::None,
+        };
     }
-    if (datastream == "CmdStart") {
+    if (datastream == "CmdStartRequest") {
+        std::optional<core::Temperature> explicit_target;
+        bool has_explicit_target = false;
         if (!is_one(payload)) {
-            return {BlynkCommandDecision::Ignored, std::nullopt, BlynkFirmwareOperation::None};
+            const auto pair = split_pair(payload);
+            if (!pair || pair->first != "1") {
+                return malformed();
+            }
+            bool valid = false;
+            const auto target = parse_temperature(pair->second, valid);
+            if (!valid) {
+                return malformed();
+            }
+            explicit_target = target;
+            has_explicit_target = true;
         }
         auto recipe = startup_recipe_;
-        if (pending_start_target_set_) {
-            recipe.stage.chamber_target = pending_start_target_;
-            pending_start_target_set_ = false;
-            pending_start_target_.reset();
+        if (has_explicit_target) {
+            recipe.stage.chamber_target = explicit_target;
         }
         return {
             BlynkCommandDecision::Accepted,
@@ -328,12 +359,6 @@ BlynkMappedCommand BlynkCommandMapper::map(
         return malformed();
     }
     return {BlynkCommandDecision::Ignored, std::nullopt, BlynkFirmwareOperation::None};
-}
-
-void BlynkCommandMapper::disconnected() noexcept
-{
-    pending_start_target_.reset();
-    pending_start_target_set_ = false;
 }
 
 } // namespace smoker::platform
