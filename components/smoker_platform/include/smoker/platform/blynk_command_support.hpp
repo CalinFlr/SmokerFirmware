@@ -75,8 +75,9 @@ struct BlynkMappedCommand final {
     BlynkFirmwareOperation firmware_operation{BlynkFirmwareOperation::None};
 };
 
-// Deterministic fixed-buffer command translation. Atomic Start payloads and
-// temperatures are parsed without retained cross-message state. Decimal
+// Deterministic fixed-buffer command translation. The exact atomic-Start UI
+// release `0` is ignored; Start payloads and temperatures are parsed without
+// retained cross-message state. Decimal
 // parsing accepts only an optional minus sign, decimal digits, and at most one
 // decimal point; it does not depend on floating-point from_chars support on
 // Xtensa.

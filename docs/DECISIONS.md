@@ -1355,9 +1355,12 @@ Status: Accepted.
 ## D060 — Blynk Start is one atomic bounded request
 
 Blynk remote Start uses the single active String datastream
-`CmdStartRequest`. Its complete payload is exactly `1` for the startup recipe or
-`1,<target_celsius>` for an atomic target override; strict existing decimal
-grammar applies, and `-273.1` maps to an absent chamber target. The mapper
+`CmdStartRequest`. Exact payload `0` is the release/reset emitted by a Push UI
+and is ignored: it creates no command, application admission, correlation,
+semantic result, remote error, or state change, and cannot enable heating. Its
+Start payload is exactly `1` for the startup recipe or `1,<target_celsius>` for
+an atomic target override; strict existing decimal grammar applies, and
+`-273.1` maps to an absent chamber target. The mapper
 copies the startup recipe and constructs one `StartSessionCommand` from that
 one message. It does not use JSON, allocate parser storage, retain a pending
 target, or require disconnect cleanup for Start state.
@@ -1374,9 +1377,15 @@ The active template consequently contains 16 output and nine control
 datastreams, 25 total. All controls retain sync-with-latest disabled, clean
 session, QoS 0, no retain, no get/sync, no replay, generation discard, reserved
 Stop admission, and round-robin behavior. Console migration is a manual owner
-operation: create/configure the new String control, move the UI action, disable
-the two old widgets, then install new firmware. This repository change does not
-modify Blynk Console or validate broker, target, heater, or hardware-safety
-behavior.
+operation. The mobile app may bind a Push Button to the String control with ON
+`1` or a fixed `1,<target>`, OFF `0`, and sync disabled; arbitrary dynamic
+targets use a String input or separate presets rather than implicit slider
+composition. Standard Web Dashboard Switch/Image Button widgets are numeric and
+cannot bind directly to the String control, so web Start uses Text Input/
+Terminal or remains disabled pending a verified compatible mechanism. Migration
+creates/configures the String control first, disables legacy widgets, verifies
+Start-plus-no-op press/release, and only then installs firmware. This repository
+does not modify Blynk Console or validate broker, target, heater, or hardware-
+safety behavior.
 
 Status: Accepted.

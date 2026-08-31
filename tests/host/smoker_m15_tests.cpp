@@ -303,8 +303,8 @@ void test_atomic_start_mapping_and_strict_parser()
     assert(independent_start != nullptr);
     assert(independent_start->recipe.stage.chamber_target->celsius() == 110.0F);
 
-    constexpr std::array<std::string_view, 11U> malformed_requests{
-        "", "0", "2", "1,", ",110", "1,110,120", "1, 110", "1,+110",
+    constexpr std::array<std::string_view, 10U> malformed_requests{
+        "", "2", "1,", ",110", "1,110,120", "1, 110", "1,+110",
         "1,1e2", "start,110", "1,nan",
     };
     for (const auto payload : malformed_requests) {
@@ -317,6 +317,97 @@ void test_atomic_start_mapping_and_strict_parser()
     }
 }
 
+void test_atomic_start_release_is_noop_without_feedback()
+{
+    smoker::platform::BlynkCommandMapper mapper{recipe()};
+    smoker::app::SpscCommandMailbox application_mailbox;
+    smoker::platform::BlynkCommandResults results;
+    smoker::platform::BlynkEventScheduler events;
+
+    const auto release = mapper.map("CmdStartRequest", "0", 60U);
+    assert(release.decision == smoker::platform::BlynkCommandDecision::Ignored);
+    assert(!release.command.has_value());
+    assert(release.firmware_operation
+        == smoker::platform::BlynkFirmwareOperation::None);
+    const auto protocol_error = smoker::platform::blynk_command_error_message(
+        release.decision
+    );
+    assert(protocol_error.empty());
+
+    // Mirror the service decision gates: only non-empty protocol errors emit a
+    // remote event, and only Accepted mappings enter correlation tracking.
+    if (!protocol_error.empty()) {
+        events.queue(smoker::platform::BlynkEventType::RemoteError, protocol_error);
+    }
+    if (release.decision == smoker::platform::BlynkCommandDecision::Accepted
+        && release.command.has_value()) {
+        constexpr std::uint32_t correlation = 600U;
+        assert(application_mailbox.push(*release.command, correlation, 1U)
+            == smoker::app::MailboxAdmission::Accepted);
+        assert(results.track(correlation));
+    }
+
+    assert(application_mailbox.pending() == 0U);
+    assert(results.pending_count() == 0U);
+    assert(!events.pending_publish(0).has_value());
+}
+
+void test_atomic_start_button_press_release_sequences()
+{
+    const auto exercise = [](const std::string_view press_payload,
+                             const float expected_target) {
+        smoker::platform::BlynkCommandMapper mapper{recipe()};
+        smoker::app::SpscCommandMailbox application_mailbox;
+        smoker::platform::BlynkCommandResults results;
+        smoker::platform::BlynkEventScheduler events;
+        std::size_t accepted_commands = 0U;
+        std::uint32_t next_correlation = 800U;
+
+        const std::array payloads{press_payload, std::string_view{"0"}};
+        for (std::size_t index = 0U; index < payloads.size(); ++index) {
+            const auto mapped = mapper.map(
+                "CmdStartRequest", payloads[index],
+                static_cast<smoker::core::SessionId>(80U + index)
+            );
+            const auto protocol_error =
+                smoker::platform::blynk_command_error_message(mapped.decision);
+            if (!protocol_error.empty()) {
+                events.queue(
+                    smoker::platform::BlynkEventType::RemoteError, protocol_error
+                );
+                continue;
+            }
+            if (mapped.decision != smoker::platform::BlynkCommandDecision::Accepted) {
+                assert(!mapped.command.has_value());
+                continue;
+            }
+            assert(mapped.command.has_value());
+            const auto correlation = next_correlation++;
+            assert(application_mailbox.push(*mapped.command, correlation, 4U)
+                == smoker::app::MailboxAdmission::Accepted);
+            assert(results.track(correlation));
+            ++accepted_commands;
+        }
+
+        assert(accepted_commands == 1U);
+        assert(application_mailbox.pending() == 1U);
+        assert(results.pending_count() == 1U);
+        assert(!events.pending_publish(0).has_value());
+
+        smoker::app::Command admitted;
+        assert(application_mailbox.try_pop(admitted));
+        assert(application_mailbox.pending() == 0U);
+        const auto* const start =
+            std::get_if<smoker::app::StartSessionCommand>(&admitted);
+        assert(start != nullptr);
+        assert(start->recipe.stage.chamber_target.has_value());
+        assert(start->recipe.stage.chamber_target->celsius() == expected_target);
+    };
+
+    exercise("1", 110.0F);
+    exercise("1,125.0", 125.0F);
+}
+
 void test_legacy_start_protocol_fails_closed()
 {
     smoker::platform::BlynkCommandMapper mapper{recipe()};
@@ -327,6 +418,11 @@ void test_legacy_start_protocol_fails_closed()
     assert(legacy_start.decision
         == smoker::platform::BlynkCommandDecision::Deprecated);
     assert(!legacy_target.command.has_value() && !legacy_start.command.has_value());
+
+    const auto release = mapper.map("CmdStartRequest", "0", 3U);
+    assert(release.decision == smoker::platform::BlynkCommandDecision::Ignored);
+    assert(!release.command.has_value());
+    assert(smoker::platform::blynk_command_error_message(release.decision).empty());
 
     const auto atomic = mapper.map("CmdStartRequest", "1", 48U);
     const auto* const atomic_start =
@@ -855,6 +951,8 @@ int main()
     test_status_timer_normalization_and_serializer_budget();
     test_allowlisted_deterministic_command_mapping();
     test_atomic_start_mapping_and_strict_parser();
+    test_atomic_start_release_is_noop_without_feedback();
+    test_atomic_start_button_press_release_sequences();
     test_legacy_start_protocol_fails_closed();
     test_atomic_start_feedback_and_correlation();
     test_raw_mailbox_stop_reservation_and_concurrency();

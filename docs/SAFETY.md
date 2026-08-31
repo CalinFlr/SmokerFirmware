@@ -358,7 +358,10 @@ the final appliance is electrically or thermally safe.
 
 A remote Start request and its optional target cross MQTT as one bounded
 `CmdStartRequest` message and become one ordinary `StartSessionCommand` only
-after complete parsing. The deprecated two-message `CmdStartTargetC` plus
+after complete parsing. Exact payload `0` is treated only as the release/reset
+of a Push UI: it is ignored before application admission and correlation, emits
+no remote error, and cannot enable heating. The deprecated two-message
+`CmdStartTargetC` plus
 `CmdStart` protocol fails closed with remote-protocol error feedback and cannot
 configure or submit Start. Neither path can command the heater directly:
 application semantic validation, synchronous safety, and the final heater gate

@@ -56,7 +56,8 @@ A future item is **not permission to implement it early**.
 - **M15 — personal Blynk remote access:** implemented for host and ESP-IDF
   cross-build validation. One owner controls one home smoker through Blynk's
   existing app and MQTT/TLS service. Remote Start now uses one atomic bounded
-  request and rejects the former two-message protocol. KFB003 provisioning,
+  request, ignores the exact Push-button `0` release, and rejects the former
+  two-message protocol. KFB003 provisioning,
   live home-STA/TLS, status, legacy simulated Start/Stop, reboot no-replay,
   remote-error e-mail, and firmware-check scenarios passed; manual Console
   migration to the atomic control, native mobile UI, phone push, exact broker
@@ -860,11 +861,20 @@ must not replay or synchronize a retained Start/OTA control value; a new user
 gesture is required. Every command retains the same validation, safety gate,
 and application semantics as its local equivalent.
 
-`CmdStartRequest` carries exactly `1` or `1,<target_celsius>` and constructs one
-`StartSessionCommand` only after full strict parsing. `CmdStart` and
+`CmdStartRequest=0` is an ignored Push-button release which creates no command,
+correlation, semantic result, remote error, or state change. Exact `1` or
+`1,<target_celsius>` constructs one `StartSessionCommand` only after full strict
+parsing. `CmdStart` and
 `CmdStartTargetC` are deprecated rejection-only names; they cannot retain a
 target or enter the application mailbox. The active contract is 16 outputs plus
 nine controls (25 datastreams), and owner Console migration remains manual.
+
+The documented mobile default/fixed-preset path is a String Push Button with ON
+`1` or fixed `1,<target>`, OFF `0`, and sync disabled. Arbitrary dynamic targets
+use a String input or separate presets, not implicit slider composition. The
+standard Web Dashboard Switch/Image Button widgets are numeric and cannot bind
+directly to this String control; web Start therefore uses Text Input/Terminal or
+stays disabled until a separately verified compatible mechanism is selected.
 
 M15 does not upload or backfill M14 raw history. Blynk datastream retention is
 an auxiliary visualization cache, not the authoritative durable session log.
@@ -876,7 +886,8 @@ Definition of done:
 - host tests cover normalized-projection equality, first-connect publication,
   five-second throttling, coalescing, silence without change, and immediate
   event/command-result separation;
-- host/concurrency tests cover strict atomic Start mapping, legacy fail-closed
+- host/concurrency tests cover the ignored `0` release, default/fixed-target
+  press/release sequences, strict atomic Start mapping, legacy fail-closed
   feedback, correlated results, no retained Start/OTA replay, bounded
   saturation, and control independence from a stalled or disconnected Blynk
   transport;

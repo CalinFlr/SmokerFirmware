@@ -280,6 +280,13 @@ BlynkMappedCommand BlynkCommandMapper::map(
         };
     }
     if (datastream == "CmdStartRequest") {
+        if (payload == "0") {
+            return {
+                BlynkCommandDecision::Ignored,
+                std::nullopt,
+                BlynkFirmwareOperation::None,
+            };
+        }
         std::optional<core::Temperature> explicit_target;
         bool has_explicit_target = false;
         if (!is_one(payload)) {

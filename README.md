@@ -291,7 +291,20 @@ and credential persistence across a signed reboot have passed. The historical
 Blynk Console template/device, events, and 22-widget web dashboard used the
 former two-message Start protocol. The owner must perform the documented manual
 Console migration to `CmdStartRequest` before installing this firmware; the
-repository change does not modify Console.
+repository does not modify Console. The final String contract treats exact `0`
+as an ignored Push-button release, `1` as startup-recipe Start, and
+`1,<target_celsius>` as atomic explicit-target Start (`1,-273.1` is monitoring-
+only). The release creates no command, correlation, remote error, or state
+change.
+
+In the mobile app, default or fixed-preset Start uses a Push Button with ON
+`1` or a fixed `1,<target>`, OFF `0`, and sync-with-latest disabled. Arbitrary
+dynamic targets require a String Text Input or separate preset buttons; a
+standard Button does not interpolate a separate slider. In the Web Dashboard,
+standard Switch/Image Button widgets are numeric and cannot bind directly to
+the String Start datastream, so use Text Input/Terminal or keep web Start
+disabled pending a separately verified compatible mechanism. The exact
+Console-first migration and manual press/release check are in the template doc.
 The provisioned KFB003 has also passed live home-STA association, Blynk TLS and
 online status, the historical legacy simulated Start/Stop flow with correlated
 acceptance, heater-OFF after Stop, reboot reconnect without Start replay, the
@@ -688,8 +701,9 @@ passed with simulated I/O; deliberate Wi-Fi-loss-during-RUNNING remains open.
 M15 UART provisioning and on-board NVS persistence across a signed reboot have
 passed on KFB003. The historical owner Console template/device used 26
 datastreams and a 22-widget web dashboard; the new 25-datastream atomic Start
-contract requires the documented manual owner migration and is not modified by
-this repository PR. Live home-STA/TLS/online status, legacy simulated Start/Stop
+contract includes the ignored `0` release and requires the documented manual
+owner migration. Blynk Console state is not modified by this repository PR.
+Live home-STA/TLS/online status, legacy simulated Start/Stop
 with heater-OFF after Stop, reboot reconnect/no-Start-replay,
 remote-error e-mail delivery, and a Blynk-triggered M13 firmware check passed.
 Phone push receipt, exact broker timing/silence, deliberate transport loss, and

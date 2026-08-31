@@ -63,7 +63,7 @@ request, or restore any control datastream, including after reconnect.
 
 | Datastream name | Type / accepted payload | Resulting existing operation |
 |---|---|---|
-| `CmdStartRequest` | String `1` or `1,<target_celsius>` | one atomic `StartSessionCommand`; `1` uses the startup recipe, an explicit target replaces its chamber target, and `-273.1` selects monitoring-only |
+| `CmdStartRequest` | String `0`, `1`, or `1,<target_celsius>` | `0` is an ignored UI release; `1` creates one atomic `StartSessionCommand` from the startup recipe; an explicit target replaces its chamber target, and `-273.1` selects monitoring-only |
 | `CmdStop` | Integer `1` | `StopSessionCommand` |
 | `CmdChamberTargetC` | Double, valid target or `-273.1` | `SetChamberTargetCommand`; sentinel clears the target |
 | `CmdProbeTarget` | String `probe_id,target_celsius` | `SetProbeTargetCommand`; target `-273.1` clears it |
@@ -73,22 +73,37 @@ request, or restore any control datastream, including after reconnect.
 | `CmdClearResolvedFault` | Integer `1` | `ClearResolvedFaultCommand` |
 | `CmdFirmware` | Integer `1` check, `2` install | existing M13 check/install request only |
 
-`CmdStartRequest` accepts exactly `1` or `1,<target_celsius>`. The target uses
-the existing strict decimal parser: optional minus, decimal digits, and at most
-one decimal point. Whitespace, plus signs, exponents, NaN/infinity, locale
-separators, empty fields, a prefix other than `1`, multiple commas, and extra
-fields are malformed. The mapper retains no parameter from one message for a
-later Start, and the payload is not JSON.
+`CmdStartRequest` has this exact contract:
 
-Every accepted transport request receives a locally generated nonzero 32-bit
+```text
+0                  -> ignored UI release/reset
+1                  -> Start with the startup recipe
+1,<target_celsius> -> Start atomically with an explicit target
+1,-273.1           -> Start atomically in monitoring-only mode
+anything else      -> malformed
+```
+
+`0` is not a Start command. It creates no application-mailbox entry, pending
+correlation, semantic result, `smoker_remote_error`, or state change, and it is
+never replayed or synchronized. Ignoring this exact release value is
+fail-closed because it cannot enable heating.
+
+The target uses the existing strict decimal parser: optional minus, decimal
+digits, and at most one decimal point. Whitespace, plus signs, exponents,
+NaN/infinity, locale separators, empty fields, a prefix other than `1`, multiple
+commas, and extra fields are malformed. The mapper retains no parameter from
+one message for a later Start, and the payload is not JSON.
+
+Every request mapped `Accepted` receives a locally generated nonzero 32-bit
 correlation ID. `LastCommandResult` is updated only when the immutable
 application snapshot reports its semantic result. A full mailbox, malformed
 payload, or unsupported value is reported as bounded remote feedback; it is
 not reported as a successful smoker operation. `CmdStartRequest` and
 `CmdFirmware=2` are never replayed from a stored/synchronized value after
-reconnect. Parsing stays single-sourced in the mapper, so a malformed
-`CmdStartRequest` may consume an internal session ID; session IDs may therefore
-contain gaps, but no malformed command or correlation reaches the application.
+reconnect. Parsing stays single-sourced in the mapper, so a malformed request
+or ignored `0` release may consume an internal session ID; session IDs may
+therefore contain gaps, but no ignored/malformed command or correlation reaches
+the application.
 
 ## Deprecated Start protocol
 
@@ -101,15 +116,51 @@ produces semantic-success feedback or enters the application mailbox.
 
 ## Manual Blynk Console migration
 
-This repository change does not modify Blynk Console. The owner must migrate
-the template manually in this safe order:
+This repository does not modify Blynk Console. The owner must configure a real
+widget path supported by the selected Console surface.
+
+### Mobile App
+
+For default Start or a fixed preset, bind a mobile **Button** to the String
+`CmdStartRequest` datastream and configure:
+
+- mode **Push**;
+- ON value `1`, or a fixed preset such as `1,110.0`;
+- OFF value `0`;
+- **Sync with latest server value disabled**.
+
+The press creates the one Start request. The release emits `0`, which is the
+documented no-op and produces no false remote-error alert.
+
+For an arbitrary dynamic target, use a String-capable widget such as
+**Text Input** to send the complete `1,<target_celsius>` payload, or create
+separate fixed-preset Push buttons. Do not configure or document a standard
+Button as if it can interpolate the current value of a separate slider into its payload;
+Blynk does not provide that composition in this contract.
+
+### Web Dashboard
+
+The standard Blynk Console Web Dashboard **Switch** and **Image Button** widgets
+accept numeric datastreams, so they cannot bind directly to the String
+`CmdStartRequest` datastream. For web Start, use a String-compatible
+**Text Input** or **Terminal** widget which sends the complete payload. Otherwise
+keep web Start disabled until a separately verified compatible one-click
+mechanism is selected. The old numeric Start button cannot merely be rebound to
+the new String datastream.
+
+### Fail-closed migration order
+
+Migrate the template manually in this safe order:
 
 1. Create `CmdStartRequest` with Blynk type String.
 2. Set **Sync with latest server value disabled** for the new datastream.
-3. Configure the Start UI action to send `1` or `1,<target_celsius>` as one
-   message.
+3. Configure a compatible widget and its exact values: for example mobile Push
+   ON=`1` or ON=`1,110.0`, OFF=`0`; or a String Text Input/Terminal which sends
+   the complete payload.
 4. Remove or disable the widgets for `CmdStart` and `CmdStartTargetC`.
-5. Only then install firmware containing the atomic protocol.
+5. Manually verify that a press/release produces exactly one Start request plus
+   one ignored `0`, with no release error or second command.
+6. Only then install firmware containing the atomic protocol.
 
 This order is fail-closed across a version mismatch: old firmware ignores the
 new `CmdStartRequest`, while new firmware explicitly rejects both old Start

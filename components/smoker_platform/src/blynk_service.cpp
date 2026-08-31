@@ -446,8 +446,9 @@ private:
             }
             if (!connection_boundary_.usable(connection)) break;
             // Parsing remains single-sourced in BlynkCommandMapper. A malformed
-            // atomic request can therefore leave an intentional gap in the
-            // internal session-ID sequence without admitting any command.
+            // atomic request or ignored `0` release can therefore leave an
+            // intentional gap in the internal session-ID sequence without
+            // admitting any command or correlation.
             const bool start = inbound.datastream_view() == "CmdStartRequest";
             const auto session_id = start ? ids_.next_session() : 1U;
             auto mapped = mapper_.map(
