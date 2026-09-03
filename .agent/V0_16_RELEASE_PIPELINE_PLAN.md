@@ -118,5 +118,8 @@ exact version. No release workflow will be triggered as a test.
   --check`, `bash -n`, Python byte compilation, and Ruby Psych YAML parsing
   pass. Local `actionlint` and `shellcheck` are not installed, so neither was
   claimed or added as a dependency.
-- Step 8 remains: staged-diff/invariant review, commit, push, PR creation, and
-  remote no-tag/no-release/unmerged confirmation.
+- Step 8 is complete: the staged diff and invariants were reviewed, commit
+  `130916a` was pushed, PR #12 was opened with the required report, and both
+  push- and pull-request-triggered host/ESP-IDF checks passed. Remote checks
+  confirmed that `v0.15.0` did not move, `v0.16.0` and its release do not
+  exist, and the PR remains open and unmerged.
