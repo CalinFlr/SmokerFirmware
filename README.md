@@ -379,7 +379,7 @@ validate -> sign -> verify-signed-artifact -> publish
 |---|---|---|---|---|
 | `validate` | read | no | no | host tests, sanitizers, guardrails, ESP-IDF 6.0.2 build |
 | `sign` | read | signing step only | `firmware-release` | exact-source rebuild, sign, immediate public-key verification, bundle upload |
-| `verify-signed-artifact` | read | no | no | independent manifest/hash/size/identity/file-set and RSA verification |
+| `verify-signed-artifact` | read | no | no | reproducible exact-source rebuild plus independent payload/manifest/hash/size/identity/file-set and RSA verification |
 | `publish` | write | no | no | public revalidation and allowlisted GitHub Release upload only |
 
 Every job checks out the exact triggering commit with persisted credentials
@@ -389,6 +389,12 @@ disabled. The deterministic three-file bundle contains only
 `smoker-firmware-release/v1` binds version, tag, exact commit, fixed image name,
 SHA-256, and size. The manifest and hash detect corruption or inconsistent
 transport metadata; they do not replace the RSA-3072 publisher signature.
+The independent job also requires every byte authenticated by that signature
+to equal its own reproducible build from the triggering commit; rewriting the
+transported manifest around an older validly signed image cannot pass.
+It exports that verified image digest as a job output, and `publish` requires
+the second downloaded copy to match it before revalidating the three-file
+bundle, so neither artifact handoff is trusted for identity.
 Only the signing step receives the private key and only `publish` receives
 `contents: write`, so no job has both privileges. The workflow does not create,
 move, or push a tag. A tag-update event is rejected, a newer run for the same
@@ -410,8 +416,9 @@ is rejected rather than overwritten.
    pause: after `validate`, the tag-restricted `firmware-release` environment
    automatically admits only `sign` to use the key. Stop if repository or
    release-tag write access is no longer limited to that maintainer.
-7. Require `verify-signed-artifact` to independently validate the downloaded
-   signed bundle using the repository public key.
+7. Require `verify-signed-artifact` to rebuild the exact source without the
+   key, then independently validate the downloaded signed bundle using the
+   repository public key and exact authenticated-payload equality.
 8. Let the separate `publish` job revalidate and create the new GitHub Release.
 
 Tag creation remains a deliberate manual operation and is never automated by

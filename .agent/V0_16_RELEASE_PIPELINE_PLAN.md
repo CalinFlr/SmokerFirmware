@@ -255,3 +255,64 @@ RSA path closeout progress
   verification retain the 1,441,792-byte target image.
 - Step 6 remains: commit/push, PR evidence, current-head CI and re-review, then
   the final zero-thread/tag/release/merge audit.
+
+## Signed payload identity closeout
+
+Goal
+
+Prevent an untrusted artifact handoff from substituting an older image signed
+by the same OTA key while rewriting the unsigned manifest identity.
+
+Current repository observations
+
+- Re-review on head `a0468c70458e99ea5854c654cbdd325314fed7ce`
+  identified one valid unresolved P1: RSA authenticates only the image, while
+  the manifest and sidecar travel beside it and can be rewritten together.
+- ESP-IDF 6.0.2 Secure Boot v2 signs the sector-aligned input bytes and appends
+  exactly one 4 KiB signature sector. The ordinary verified unsigned image is
+  already sector-aligned.
+- Independent verification checks out the exact triggering commit without a
+  secret, so it can derive the expected authenticated payload itself.
+
+Steps
+
+1. Enable ESP-IDF reproducible application builds and enforce the effective
+   setting so signing and independent jobs derive identical bytes.
+2. Rebuild the exact checkout without the signing key in
+   `verify-signed-artifact`.
+3. After public-key RSA verification, require the signed image to contain the
+   exact independent build followed by exactly one Secure Boot v2 signature
+   sector.
+4. Carry the verified image digest through the workflow control plane and make
+   `publish` bind its separately downloaded copy to that digest before bundle
+   revalidation; do not add a rebuild to the write-privileged job or alter the
+   three-file bundle.
+5. Add no-network regression cases proving that a differently signed payload
+   accepted by the RSA fixture still fails identity binding, plus boundary,
+   path, missing, and symlink cases.
+6. Extend semantic workflow mutations, source-of-truth documentation, and the
+   complete local validation matrix.
+7. Commit/push, report the evidence on the P1 thread, wait for current-head CI,
+   resolve only with proof, request another review, and repeat the remote
+   tag/release/merge audit.
+
+Risks / unresolved items
+
+- The fake RSA harness proves orchestration and fail-closed payload comparison,
+  not cryptography; the pinned ESP-IDF 6.0.2 command remains the signature
+  evidence.
+- Reproducibility must be demonstrated with clean independent target build
+  directories before the workflow change is accepted.
+
+Payload identity closeout progress
+
+- Steps 1-5 are complete. The 15-case executable harness rejects a substituted
+  payload even after its fake RSA verifier accepts it, and covers exact
+  signature-sector length plus both signed/reference path boundaries.
+- Step 6 is complete. The workflow suite passes 24/24 mutations, and two clean
+  ESP-IDF 6.0.2 build directories produced identical 1,441,792-byte images with
+  SHA-256 `91d4fe0266f71625358b509eed9f9a704ad185e45033e7ab0eb6f9cc2d0e8ffe`.
+- Step 7 local validation is complete: all dedicated suites, host/sanitizers,
+  IDF-only, combined verification, shell syntax, and diff checks pass. The
+  remaining work is commit/push, P1 response and resolution, current-head
+  CI/re-review, and the remote invariant audit.

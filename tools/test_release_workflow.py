@@ -119,6 +119,37 @@ class ReleaseWorkflowGuardrailTests(unittest.TestCase):
             "commits/main",
         )
 
+    def test_independent_payload_rebuild_is_required(self) -> None:
+        marker = "  verify-signed-artifact:\n"
+        start = self.source.index(marker)
+        suffix = self.source[start:].replace(
+            "command: bash tools/verify.sh --idf-only",
+            "command: bash tools/check_release_workflow.py",
+            1,
+        )
+        self.assertTrue(check_workflow(self.source[:start] + suffix))
+
+    def test_independent_payload_comparison_is_required(self) -> None:
+        self.assert_mutation_rejected(
+            "signed-release-bundle/smoker_controller.bin build-verify/smoker_controller.bin",
+            "signed-release-bundle/smoker_controller.bin",
+        )
+
+    def test_verified_digest_output_is_required(self) -> None:
+        self.assert_mutation_rejected(
+            "image_sha256: ${{ steps.verified_image.outputs.sha256 }}",
+            "image_sha256: unverified",
+        )
+
+    def test_verified_digest_step_id_is_required(self) -> None:
+        self.assert_mutation_rejected("id: verified_image", "id: unverified_image")
+
+    def test_publish_must_bind_to_verified_digest(self) -> None:
+        self.assert_mutation_rejected(
+            "VERIFIED_IMAGE_SHA256: ${{ needs['verify-signed-artifact'].outputs.image_sha256 }}",
+            "VERIFIED_IMAGE_SHA256: unverified",
+        )
+
     def test_tag_update_event_is_rejected(self) -> None:
         self.assert_mutation_rejected(
             "TAG_CREATED: ${{ github.event.created }}",

@@ -1413,9 +1413,18 @@ The signer has no write permission, immediately verifies its output using the
 versioned public key, and emits a bounded bundle rather than publishing.
 
 `verify-signed-artifact` has neither the environment, secret, nor write
-permission. It downloads the signed bundle and independently repeats strict
-manifest, SHA-256, size, identity, file-set, and RSA public-key verification.
-It then emits the verified bundle consumed by `publish`. Only `publish` has
+permission. It first reproducibly rebuilds the exact triggering checkout
+without a signing key, then downloads the signed bundle and independently
+repeats strict manifest, SHA-256, size, identity, file-set, and RSA public-key
+verification. ESP Secure Boot v2 authenticates the sector-aligned application
+payload and appends exactly one 4 KiB signature sector; the verifier requires
+that entire authenticated payload to equal the independent build byte for
+byte. A substituted older image signed by the same key therefore fails even if
+its transported manifest and checksum are rewritten. The job exports the
+verified image SHA-256 through the trusted workflow control plane and emits the
+verified bundle consumed by `publish`; after the second artifact download,
+`publish` requires the image to match that exact output before its public
+bundle checks. Only `publish` has
 `contents: write`; it cannot rebuild or sign, repeats the public manifest/hash
 checks, rejects an existing release, resolves the live release tag and requires
 its commit to equal the triggering `github.sha`, and uploads only
@@ -1428,6 +1437,11 @@ the schema, version, tag, commit, image name, SHA-256, and image size. The
 bundle contains exactly the image, sidecar, and manifest. SHA-256 and the
 manifest provide deterministic integrity and identity binding but do not
 replace RSA-3072 publisher authentication.
+
+`CONFIG_APP_REPRODUCIBLE_BUILD=y` removes build date, time, and path variation
+so the isolated signing and verification jobs can derive the same unsigned
+application bytes from the same exact checkout. This changes build metadata,
+not controller behavior.
 
 This separation prevents one job from holding both the signing key and release
 write authority. It does not eliminate D050/D051's residual risks: losing the

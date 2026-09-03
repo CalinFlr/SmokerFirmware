@@ -5,6 +5,7 @@ set -euo pipefail
 repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 build_dir_input="${SMOKER_RELEASE_BUILD_DIR:-$repository_root/build-verify}"
 signed_image_input="${1:-$repository_root/smoker_controller.bin}"
+expected_unsigned_input="${2:-}"
 public_key="$repository_root/keys/smoker_ota_signing_public.pem"
 
 command -v python3 >/dev/null 2>&1 || {
@@ -35,6 +36,22 @@ command -v idf.py >/dev/null 2>&1 || {
     echo "trusted OTA public key is missing: $public_key" >&2
     exit 1
 }
+[[ -n "$expected_unsigned_input" ]] || {
+    echo "expected independent unsigned image path is required" >&2
+    exit 2
+}
+[[ ! -L "$expected_unsigned_input" ]] || {
+    echo "independent unsigned image must not be a symlink: $expected_unsigned_input" >&2
+    exit 1
+}
+[[ -e "$expected_unsigned_input" ]] || {
+    echo "independent unsigned image is missing: $expected_unsigned_input" >&2
+    exit 1
+}
+[[ -f "$expected_unsigned_input" ]] || {
+    echo "independent unsigned image is not a regular file: $expected_unsigned_input" >&2
+    exit 1
+}
 
 if ! signed_image="$(python3 - "$signed_image_input" <<'PY'
 import sys
@@ -47,6 +64,20 @@ print(path.resolve(strict=True))
 PY
 )"; then
     echo "failed to canonicalize signed release image: $signed_image_input" >&2
+    exit 1
+fi
+
+if ! expected_unsigned="$(python3 - "$expected_unsigned_input" <<'PY'
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+if path.is_symlink() or not path.is_file():
+    raise SystemExit(1)
+print(path.resolve(strict=True))
+PY
+)"; then
+    echo "failed to canonicalize independent unsigned image: $expected_unsigned_input" >&2
     exit 1
 fi
 
@@ -67,6 +98,9 @@ fi
 idf.py -B "$build_dir" secure-verify-signature \
     --keyfile "$public_key" \
     "$signed_image"
+python3 "$repository_root/tools/check_signed_release_payload.py" \
+    "$signed_image" \
+    "$expected_unsigned"
 python3 "$repository_root/tools/check_firmware_size.py" \
     "$signed_image" \
     --partition-size 3145728 \

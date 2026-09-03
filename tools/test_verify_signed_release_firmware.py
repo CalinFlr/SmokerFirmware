@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise signed-image path handling against ESP-IDF 6.0.2 cwd semantics."""
+"""Exercise independent payload binding and ESP-IDF 6.0.2 cwd semantics."""
 
 from __future__ import annotations
 
@@ -14,7 +14,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 VERIFY_SCRIPT = ROOT / "tools" / "verify_signed_release_firmware.sh"
 EXPECTED_IDF_VERSION = "ESP-IDF v6.0.2"
-IMAGE_BYTES = b"signed-release-path-fixture\x00\x01\x02"
+SECTOR_SIZE = 4096
+UNSIGNED_BYTES = b"independent-release-payload\x00\x01\x02".ljust(
+    SECTOR_SIZE, b"\xff"
+)
+SIGNATURE_SECTOR = (b"\xe7\x02" + b"fake-rsa-signature").ljust(
+    SECTOR_SIZE, b"\xff"
+)
+SIGNED_BYTES = UNSIGNED_BYTES + SIGNATURE_SECTOR
 
 FAKE_IDF = r"""#!/usr/bin/env python3
 import json
@@ -86,18 +93,35 @@ class VerifySignedReleaseFirmwareTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
-    def create_image(self, relative_path: str) -> Path:
-        image = self.fixture_root / relative_path
-        image.parent.mkdir(parents=True, exist_ok=True)
-        image.write_bytes(IMAGE_BYTES)
-        return image
+    def create_file(self, relative_path: str, contents: bytes) -> Path:
+        path = self.fixture_root / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(contents)
+        return path
+
+    def create_pair(
+        self,
+        signed_path: str = "signed-release-bundle/smoker_controller.bin",
+        unsigned_path: str = "independent-build/smoker_controller.bin",
+    ) -> tuple[Path, Path]:
+        return (
+            self.create_file(signed_path, SIGNED_BYTES),
+            self.create_file(unsigned_path, UNSIGNED_BYTES),
+        )
 
     def run_script(
-        self, image_argument: str, *, environment: dict[str, str] | None = None
+        self,
+        signed_argument: str,
+        unsigned_argument: str | None,
+        *,
+        environment: dict[str, str] | None = None,
     ) -> subprocess.CompletedProcess[str]:
         self.log.unlink(missing_ok=True)
+        arguments = ["bash", str(VERIFY_SCRIPT), signed_argument]
+        if unsigned_argument is not None:
+            arguments.append(unsigned_argument)
         return subprocess.run(
-            ["bash", str(VERIFY_SCRIPT), image_argument],
+            arguments,
             cwd=self.fixture_root,
             env=environment or self.environment,
             text=True,
@@ -111,12 +135,12 @@ class VerifySignedReleaseFirmwareTests(unittest.TestCase):
     def assert_successful_absolute_verification(
         self,
         result: subprocess.CompletedProcess[str],
-        expected_image: Path,
+        expected_signed: Path,
         expected_build_dir: Path | None = None,
     ) -> None:
         self.assertEqual(result.returncode, 0, result.stderr)
         invocation = self.invocation()
-        expected = str(expected_image.resolve(strict=True))
+        expected = str(expected_signed.resolve(strict=True))
         self.assertEqual(invocation["datafile"], expected)
         self.assertTrue(invocation["datafile_is_absolute"])
         self.assertEqual(invocation["arguments"][-1], expected)
@@ -124,7 +148,12 @@ class VerifySignedReleaseFirmwareTests(unittest.TestCase):
         self.assertEqual(invocation["tool_cwd"], str(expected_build))
         self.assertTrue(Path(str(invocation["build_argument"])).is_absolute())
         self.assertIn(
-            f"Firmware size guard: {len(IMAGE_BYTES)} / 3145728 bytes",
+            "Signed release payload matches the independent reproducible build "
+            f"({len(UNSIGNED_BYTES)} authenticated bytes)",
+            result.stdout,
+        )
+        self.assertIn(
+            f"Firmware size guard: {len(SIGNED_BYTES)} / 3145728 bytes",
             result.stdout,
         )
 
@@ -135,65 +164,130 @@ class VerifySignedReleaseFirmwareTests(unittest.TestCase):
         self.assertIn(expected_message, result.stderr)
         self.assertFalse(self.log.exists(), "fake RSA command unexpectedly ran")
 
-    def test_workflow_relative_path_becomes_absolute(self) -> None:
-        image = self.create_image("signed-release-bundle/smoker_controller.bin")
-        result = self.run_script("signed-release-bundle/smoker_controller.bin")
-        self.assert_successful_absolute_verification(result, image)
+    def test_workflow_relative_paths_become_absolute(self) -> None:
+        signed, unsigned = self.create_pair()
+        result = self.run_script(
+            "signed-release-bundle/smoker_controller.bin",
+            "independent-build/smoker_controller.bin",
+        )
+        self.assert_successful_absolute_verification(result, signed)
+        self.assertEqual(unsigned.read_bytes(), UNSIGNED_BYTES)
 
-    def test_absolute_path_remains_supported(self) -> None:
-        image = self.create_image("absolute/smoker_controller.bin")
-        result = self.run_script(str(image.resolve()))
-        self.assert_successful_absolute_verification(result, image)
+    def test_absolute_paths_remain_supported(self) -> None:
+        signed, unsigned = self.create_pair(
+            "absolute/smoker_controller.bin", "absolute/reference.bin"
+        )
+        result = self.run_script(str(signed.resolve()), str(unsigned.resolve()))
+        self.assert_successful_absolute_verification(result, signed)
 
-    def test_path_with_spaces_and_shell_characters_is_one_argument(self) -> None:
-        relative = "signed release $(not-executed);[bundle]/smoker controller.bin"
-        image = self.create_image(relative)
-        result = self.run_script(relative)
-        self.assert_successful_absolute_verification(result, image)
+    def test_paths_with_spaces_and_shell_characters_are_single_arguments(self) -> None:
+        signed, unsigned = self.create_pair(
+            "signed $(not-executed);[bundle]/smoker controller.bin",
+            "reference $(not-executed);[build]/expected image.bin",
+        )
+        result = self.run_script(
+            str(signed.relative_to(self.fixture_root)),
+            str(unsigned.relative_to(self.fixture_root)),
+        )
+        self.assert_successful_absolute_verification(result, signed)
 
     def test_relative_build_directory_is_canonicalized(self) -> None:
-        image = self.create_image("relative-build/smoker_controller.bin")
+        signed, unsigned = self.create_pair()
         environment = self.environment.copy()
         environment["SMOKER_RELEASE_BUILD_DIR"] = "relative build output"
-        result = self.run_script(str(image), environment=environment)
+        result = self.run_script(str(signed), str(unsigned), environment=environment)
         self.assert_successful_absolute_verification(
-            result,
-            image,
-            self.fixture_root / "relative build output",
+            result, signed, self.fixture_root / "relative build output"
         )
 
-    def test_missing_file_is_rejected_before_rsa(self) -> None:
-        result = self.run_script("missing/smoker_controller.bin")
+    def test_substituted_validly_signed_payload_is_rejected(self) -> None:
+        signed, unsigned = self.create_pair()
+        signed.write_bytes(
+            b"older-validly-signed-payload".ljust(SECTOR_SIZE, b"\xff")
+            + SIGNATURE_SECTOR
+        )
+        result = self.run_script(str(signed), str(unsigned))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue(self.log.exists(), "RSA fixture should accept substituted image")
+        self.assertIn(
+            "RSA-authenticated payload does not match the independent build",
+            result.stderr,
+        )
+
+    def test_missing_or_extra_signature_sector_is_rejected(self) -> None:
+        for suffix in (b"", SIGNATURE_SECTOR + SIGNATURE_SECTOR):
+            with self.subTest(sectors=len(suffix) // SECTOR_SIZE):
+                signed, unsigned = self.create_pair()
+                signed.write_bytes(UNSIGNED_BYTES + suffix)
+                result = self.run_script(str(signed), str(unsigned))
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(
+                    "plus exactly one ESP Secure Boot v2 signature sector",
+                    result.stderr,
+                )
+
+    def test_unaligned_independent_image_is_rejected(self) -> None:
+        signed, unsigned = self.create_pair()
+        unsigned.write_bytes(b"not-sector-aligned")
+        result = self.run_script(str(signed), str(unsigned))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("is not ESP Secure Boot v2 sector-aligned", result.stderr)
+
+    def test_missing_signed_file_is_rejected_before_rsa(self) -> None:
+        unsigned = self.create_file("reference.bin", UNSIGNED_BYTES)
+        result = self.run_script("missing.bin", str(unsigned))
         self.assert_rejected_before_rsa(result, "signed release image is missing")
 
-    def test_directory_is_rejected_before_rsa(self) -> None:
+    def test_signed_directory_is_rejected_before_rsa(self) -> None:
         directory = self.fixture_root / "not-an-image"
         directory.mkdir()
-        result = self.run_script(directory.name)
+        unsigned = self.create_file("reference.bin", UNSIGNED_BYTES)
+        result = self.run_script(directory.name, str(unsigned))
         self.assert_rejected_before_rsa(
             result, "signed release image is not a regular file"
         )
 
-    def test_symlink_is_rejected_before_rsa(self) -> None:
-        target = self.create_image("target/smoker_controller.bin")
+    def test_signed_symlink_is_rejected_before_rsa(self) -> None:
+        target, unsigned = self.create_pair("target/signed.bin", "reference.bin")
         link = self.fixture_root / "linked-image.bin"
         link.symlink_to(target)
-        result = self.run_script(link.name)
+        result = self.run_script(link.name, str(unsigned))
         self.assert_rejected_before_rsa(
             result, "signed release image must not be a symlink"
         )
 
+    def test_missing_independent_image_is_rejected_before_rsa(self) -> None:
+        signed = self.create_file("signed.bin", SIGNED_BYTES)
+        result = self.run_script(str(signed), "missing-reference.bin")
+        self.assert_rejected_before_rsa(result, "independent unsigned image is missing")
+
+    def test_independent_image_symlink_is_rejected_before_rsa(self) -> None:
+        signed, target = self.create_pair("signed.bin", "target/reference.bin")
+        link = self.fixture_root / "linked-reference.bin"
+        link.symlink_to(target)
+        result = self.run_script(str(signed), link.name)
+        self.assert_rejected_before_rsa(
+            result, "independent unsigned image must not be a symlink"
+        )
+
+    def test_independent_image_argument_is_required(self) -> None:
+        signed = self.create_file("signed.bin", SIGNED_BYTES)
+        result = self.run_script(str(signed), None)
+        self.assert_rejected_before_rsa(
+            result, "expected independent unsigned image path is required"
+        )
+
     def test_wrong_idf_version_is_rejected_before_rsa(self) -> None:
-        image = self.create_image("wrong-version/smoker_controller.bin")
+        signed, unsigned = self.create_pair()
         environment = self.environment.copy()
         environment["FAKE_IDF_VERSION"] = "ESP-IDF v6.0.1"
-        result = self.run_script(str(image), environment=environment)
+        result = self.run_script(str(signed), str(unsigned), environment=environment)
         self.assert_rejected_before_rsa(
             result, "release signature verification requires exactly ESP-IDF v6.0.2"
         )
 
     def test_fake_idf_reproduces_old_relative_path_failure(self) -> None:
-        self.create_image("signed-release-bundle/smoker_controller.bin")
+        self.create_file("signed-release-bundle/smoker_controller.bin", SIGNED_BYTES)
         result = subprocess.run(
             [
                 str(self.fake_idf),

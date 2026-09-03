@@ -68,7 +68,9 @@ idf.py -B "$build_dir" secure-sign-data \
 # from producing an update which every installed device would reject. The same
 # public-key-only helper is run again in the independent verification job.
 SMOKER_RELEASE_BUILD_DIR="$build_dir" \
-    "$repository_root/tools/verify_signed_release_firmware.sh" "$signed_image"
+    "$repository_root/tools/verify_signed_release_firmware.sh" \
+    "$signed_image" \
+    "$unsigned_image"
 chmod 0644 "$signed_image"
 
 echo "Signed release firmware verified against keys/smoker_ota_signing_public.pem"

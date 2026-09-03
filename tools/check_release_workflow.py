@@ -189,6 +189,7 @@ def check_workflow(source: str) -> list[str]:
             "needs",
             "runs-on",
             "permissions",
+            "outputs",
             "timeout-minutes",
             "steps",
         },
@@ -224,9 +225,11 @@ def check_workflow(source: str) -> list[str]:
         ),
         "verify-signed-artifact": (
             None,
+            "Rebuild independent unsigned reference",
             "Download signed release bundle",
             "Verify bundle manifest, identity, hash, size, and file set",
             "Repeat RSA verification using only the public key",
+            "Record independently verified image digest",
             "Upload independently verified bundle",
         ),
         "publish": (
@@ -272,7 +275,7 @@ def check_workflow(source: str) -> list[str]:
                 failures.append(f"{name} step must be a mapping")
                 continue
             require(
-                set(step) <= {"name", "uses", "with", "env", "run", "shell"},
+                set(step) <= {"name", "id", "uses", "with", "env", "run", "shell"},
                 f"{name} steps must not use conditions, continue-on-error, or unknown keys",
             )
 
@@ -377,6 +380,29 @@ def check_workflow(source: str) -> list[str]:
     require("actions/upload-artifact@" not in validate, "validate must not produce a release artifact")
     require("tools/release_bundle.py verify" in verify, "independent verification must verify the strict bundle")
     require("tools/verify_signed_release_firmware.sh" in verify, "independent verification must repeat public-key RSA verification")
+    require(
+        "tools/verify.sh --idf-only" in verify
+        and "build-verify/smoker_controller.bin" in verify,
+        "independent verification must rebuild and compare the exact unsigned payload",
+    )
+    require(
+        semantic_jobs["verify-signed-artifact"].get("outputs")
+        == {"image_sha256": "${{ steps.verified_image.outputs.sha256 }}"},
+        "independent verification must export the verified image digest",
+    )
+    digest_step = named_step(verify, "Record independently verified image digest")
+    require(
+        "id: verified_image" in digest_step
+        and "signed-release-bundle/smoker_controller.bin" in digest_step
+        and '>> "$GITHUB_OUTPUT"' in digest_step,
+        "verified image digest step must bind the checked image to its job output",
+    )
+    require(
+        "VERIFIED_IMAGE_SHA256: ${{ needs['verify-signed-artifact'].outputs.image_sha256 }}"
+        in publish
+        and '"$downloaded_image_sha256" != "$VERIFIED_IMAGE_SHA256"' in publish,
+        "publish must bind its downloaded image to the independent verification output",
+    )
     require("tools/release_bundle.py verify" in publish, "publish must reverify hash and manifest")
     require("github.event.created" in validate, "validate must reject tag-update events")
     require("gh release view" in publish, "publish must refuse an existing release")
