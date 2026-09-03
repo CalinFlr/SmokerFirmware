@@ -1389,3 +1389,48 @@ does not modify Blynk Console or validate broker, target, heater, or hardware-
 safety behavior.
 
 Status: Accepted.
+
+## D061 — Release signing, verification, and publication use separate jobs
+
+The next release line is `0.16.0`. The already occupied `v0.15.0` tag remains
+historical at its older commit and must not be moved or reused for newer
+firmware. Preparing `0.16.0` changes no tag or release by itself; a maintainer
+must deliberately create `v0.16.0` on the intended commit after preparation is
+merged and the manual Blynk Console migration has been verified.
+
+The tag-triggered workflow has exactly four privilege boundaries:
+
+```text
+validate -> sign -> verify-signed-artifact -> publish
+```
+
+Every job checks out the exact triggering `github.sha` with persisted checkout
+credentials disabled. `validate` has read-only contents permission, no release
+environment, and runs host tests, sanitizers, guardrails, and the exact ESP-IDF
+6.0.2 cross-build. `sign` depends on it, rebuilds the same source, and alone
+uses `firmware-release`; the private-key secret exists only in its signing step.
+The signer has no write permission, immediately verifies its output using the
+versioned public key, and emits a bounded bundle rather than publishing.
+
+`verify-signed-artifact` has neither the environment, secret, nor write
+permission. It downloads the signed bundle and independently repeats strict
+manifest, SHA-256, size, identity, file-set, and RSA public-key verification.
+It then emits the verified bundle consumed by `publish`. Only `publish` has
+`contents: write`; it cannot rebuild or sign, repeats the public manifest/hash
+checks, rejects an existing release, requires the triggering tag to exist, and
+uploads only `smoker_controller.bin`, its SHA-256 sidecar, and the versioned
+manifest.
+
+Manifest schema `smoker-firmware-release/v1` is canonical JSON with exactly
+the schema, version, tag, commit, image name, SHA-256, and image size. The
+bundle contains exactly the image, sidecar, and manifest. SHA-256 and the
+manifest provide deterministic integrity and identity binding but do not
+replace RSA-3072 publisher authentication.
+
+This separation prevents one job from holding both the signing key and release
+write authority. It does not eliminate D050/D051's residual risks: losing the
+key prevents future compatible OTA releases, and compromise of the key or the
+single maintainer's release authority remains consequential. Hardware Secure
+Boot and flash encryption remain disabled and out of scope.
+
+Status: Accepted.

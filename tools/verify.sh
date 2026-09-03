@@ -33,6 +33,7 @@ run_guardrails() {
     python3 "$repository_root/tools/check_traceability.py"
     python3 "$repository_root/tools/check_partitions.py" \
         "$repository_root/partitions.csv"
+    python3 "$repository_root/tools/check_release_workflow.py"
 }
 
 run_host_validation() {
@@ -46,6 +47,8 @@ run_host_validation() {
     }
 
     python3 "$repository_root/tools/check_m12_http_fixture.py"
+    python3 "$repository_root/tools/test_release_bundle.py"
+    python3 "$repository_root/tools/test_release_workflow.py"
 
     cmake -S "$repository_root/tests" -B "$repository_root/build-host" -G Ninja
     cmake --build "$repository_root/build-host" --clean-first

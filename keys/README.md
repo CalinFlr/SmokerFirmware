@@ -16,6 +16,7 @@ ESP-IDF's signed-update-without-Secure-Boot mode takes the trusted public-key
 digest from the signature block of the currently running signed application.
 Consequently the first full serial M13 installation and every OTA release must
 be signed by the matching private key. The private key is maintainer-only,
-ignored under `local-secrets/`, backed up separately, and supplied to the
-release job only through the tag-restricted `firmware-release` environment
-secret.
+ignored under `local-secrets/`, backed up separately, and supplied only to the
+single signing step through the tag-restricted `firmware-release` environment
+secret. The independent verifier and write-scoped publisher receive neither
+the environment nor the private key.

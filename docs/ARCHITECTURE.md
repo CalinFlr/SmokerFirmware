@@ -874,13 +874,20 @@ publisher authenticity still comes exclusively from the RSA signature checked
 by ESP-IDF.
 
 Ordinary and pull-request target builds remain deliberately unsigned and never
-receive private signing material. The tag-restricted release environment supplies
-the base64-encoded private key only to the signing step, which writes it to a
-permission-restricted temporary file, signs the prevalidated padded image,
-verifies the result against the versioned public key, and deletes the temporary
-copy. GitHub receives only the verified signed image and its SHA-256. Hardware
-Secure Boot and flash encryption remain separate physical/flash-write threat
-controls and are not enabled by M13.
+receive private signing material. The tag workflow is a strict
+`validate -> sign -> verify-signed-artifact -> publish` chain. Only `sign` uses
+the tag-restricted `firmware-release` environment, and its base64-encoded
+private key exists only in the signing step. Only `publish` has
+`contents: write`; no job receives both capabilities. `sign` rebuilds the exact
+tagged commit, writes the key to a permission-restricted temporary file, signs
+the padded image, verifies it against the versioned public key, and deletes the
+temporary copy. The next job downloads a strict three-file bundle and, without
+the environment or secret, independently checks its canonical manifest,
+version, tag, commit, file set, SHA-256, size, and RSA signature. `publish`
+downloads only that independently verified bundle, repeats its public metadata
+checks, refuses an existing release, and uploads only the fixed OTA image,
+SHA-256 sidecar, and manifest. Hardware Secure Boot and flash encryption remain
+separate physical/flash-write threat controls and are not enabled by M13.
 
 Because ESP-IDF generates serial flash targets even for those unsigned builds,
 the project attaches a fail-closed prerequisite to `flash`, `app-flash`,

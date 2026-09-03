@@ -703,10 +703,11 @@ Implemented in software:
 - critical-startup validation across five safe ControlTask/TWDT cycles before
   marking a pending image valid, with immediate rollback when runtime-context,
   ControlTask, or OtaTask bootstrap fails;
-- embedded Romanian dashboard controls and a tag-gated, tag-restricted release
-  workflow that signs outside ordinary CI, verifies against the versioned
-  public key, and publishes the signed binary and SHA-256 after host and
-  ESP-IDF 6.0.2 validation;
+- embedded Romanian dashboard controls and a tag-gated release workflow with
+  separate validate, environment-scoped sign, secret-free independent verify,
+  and write-scoped publish jobs. It binds the signed binary, SHA-256, size,
+  version, tag, and commit in a strict manifest after host and ESP-IDF 6.0.2
+  validation;
 - a public canonical source/release repository initialized from one sanitized
   root snapshot, allowing credential-free device download while RSA signatures
   remain the publisher-authentication boundary;

@@ -268,8 +268,10 @@ release the application interlock on failure.
 Every initial M13 and OTA application image must carry an ESP-IDF RSA-3072
 signature. `esp_ota_end()` rejects an image whose signature does not match the
 public-key digest from the currently running signed app. The private key is
-excluded from source and ordinary CI, and the tag-restricted release step verifies
-its output against the versioned public key before publication. This protects
+excluded from source and ordinary CI, exists only in the tag-restricted signing
+step, and is never available to the independently verifying or publishing jobs.
+Both signing and the later secret-free job verify the output against the
+versioned public key before the write-scoped publisher runs. This protects
 the network/release-asset path, not a physical attacker able to rewrite the
 currently running app or bootloader while hardware Secure Boot is disabled.
 

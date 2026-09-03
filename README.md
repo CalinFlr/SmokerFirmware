@@ -363,14 +363,56 @@ replaced. Hardware Secure Boot, eFuse provisioning, and flash encryption are
 not enabled, so an attacker with flash-write/physical access can still replace
 the running trust anchor and bypass this software-only verification.
 
-Pushing the exact tag matching `version.txt` (initially `v0.13.0`) triggers the
-release workflow. It reruns host/sanitizer/guardrail and ESP-IDF 6.0.2 checks,
-then signs the padded application inside the tag-restricted `firmware-release`
-environment, verifies it against the repository public key, and publishes only
-that signed `smoker_controller.bin` plus `smoker_controller.bin.sha256`. The
-hash is useful for download/corruption checks but is not the publisher trust
-mechanism. The workflow never creates or pushes a tag; tag creation remains an
-explicit maintainer action.
+The authoritative current source version is `0.16.0`, intended for a future
+`v0.16.0` release. Historical tag `v0.15.0` remains attached to its older
+firmware history and must never be moved or reused. This preparation change
+does not create `v0.16.0`, publish a GitHub Release, or merge its own PR.
+
+Pushing an explicitly created tag which exactly matches `v$(cat version.txt)`
+triggers this strict job chain:
+
+```text
+validate -> sign -> verify-signed-artifact -> publish
+```
+
+| Job | Contents permission | Signing secret | Release environment | Effect |
+|---|---|---|---|---|
+| `validate` | read | no | no | host tests, sanitizers, guardrails, ESP-IDF 6.0.2 build |
+| `sign` | read | signing step only | `firmware-release` | exact-source rebuild, sign, immediate public-key verification, bundle upload |
+| `verify-signed-artifact` | read | no | no | independent manifest/hash/size/identity/file-set and RSA verification |
+| `publish` | write | no | no | public revalidation and allowlisted GitHub Release upload only |
+
+Every job checks out the exact triggering commit with persisted credentials
+disabled. The deterministic three-file bundle contains only
+`smoker_controller.bin`, `smoker_controller.bin.sha256`, and
+`smoker_controller.manifest.json`. Manifest schema
+`smoker-firmware-release/v1` binds version, tag, exact commit, fixed image name,
+SHA-256, and size. The manifest and hash detect corruption or inconsistent
+transport metadata; they do not replace the RSA-3072 publisher signature.
+Only the signing step receives the private key and only `publish` receives
+`contents: write`, so no job has both privileges. The workflow does not create,
+move, or push a tag; `--verify-tag` makes publication require the triggering
+tag, and an existing release is rejected rather than overwritten.
+
+### v0.16.0 release runbook
+
+1. Merge the reviewed release-preparation PR.
+2. Migrate Blynk Console manually to `CmdStartRequest` and verify the exact
+   press/release behavior described in `docs/BLYNK_TEMPLATE.md`.
+3. Verify the intended `main` commit and its required CI checks.
+4. Explicitly create and push `v0.16.0` on that exact commit; do not move or
+   reuse `v0.15.0`.
+5. Let the tag workflow complete its unprivileged `validate` job.
+6. Approve the `firmware-release` environment so only `sign` can use the key.
+7. Require `verify-signed-artifact` to independently validate the downloaded
+   signed bundle using the repository public key.
+8. Let the separate `publish` job revalidate and create the new GitHub Release.
+
+Tag creation remains a deliberate manual operation and is never automated by
+the workflow. Losing the private key prevents future compatible OTA releases;
+compromise of the key permits malicious publisher signatures. Job isolation
+does not remove those custody risks and does not provide hardware Secure Boot
+or flash encryption.
 
 ### OTA signing-key setup
 

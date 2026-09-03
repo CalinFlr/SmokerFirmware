@@ -175,7 +175,7 @@ void test_status_timer_normalization_and_serializer_budget()
         {},
     };
     smoker::platform::FirmwareUpdateStatus firmware{};
-    copy_string(firmware.current_version, "0.15.0");
+    copy_string(firmware.current_version, "0.16.0");
     auto status = smoker::platform::make_blynk_remote_status(snapshot, firmware);
     assert(std::string_view{status.timer_state.data()} == "NONE");
     assert(std::string_view{status.firmware_available_version.data()}.empty());
