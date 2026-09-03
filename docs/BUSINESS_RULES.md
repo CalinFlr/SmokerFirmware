@@ -321,6 +321,12 @@ paths as their local equivalents. MQTT delivery is not semantic success, and
 no remote action may command heater output directly or bypass validation and
 safety.
 
+A remote Start gesture carries its Start intent and optional chamber target in
+one bounded message. A split multi-message Start protocol must fail closed
+rather than infer a default target or retain a target for a later message. The
+exact `0` emitted when a Push control is released is a UI reset gesture, not a
+Start command; it is ignored without application work or remote-error feedback.
+
 ### RA-003 — Remote status is change-driven and throttled
 
 The device publishes one current remote-status projection after Blynk

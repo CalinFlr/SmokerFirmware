@@ -779,8 +779,8 @@ def check_m12_transport_contract(failures: CheckFailures) -> None:
     decisions = (ROOT / "docs/DECISIONS.md").read_text()
     decision_ids = [int(value) for value in re.findall(r"^## D(\d{3})\b", decisions, re.MULTILINE)]
     failures.require(
-        decision_ids == list(range(1, 60)),
-        f"decision IDs must remain ordered and contiguous through D059; found {decision_ids}",
+        decision_ids == list(range(1, 61)),
+        f"decision IDs must remain ordered and contiguous through D060; found {decision_ids}",
     )
     failures.require(
         "## D051 — Missing independent release review is conditional on single-maintainer access"
@@ -2477,6 +2477,7 @@ def check_m15_blynk_contract(failures: CheckFailures) -> None:
     defaults = (ROOT / "sdkconfig.defaults").read_text()
     tool = (ROOT / "tools/provision_blynk.py").read_text()
     tests = (ROOT / "tests/host/smoker_m15_tests.cpp").read_text()
+    template_contract = (ROOT / "docs/BLYNK_TEMPLATE.md").read_text()
 
     non_platform = "\n".join(
         path.read_text()
@@ -2529,18 +2530,71 @@ def check_m15_blynk_contract(failures: CheckFailures) -> None:
         and "++result.discarded" in runtime_support,
         "ControlTask must discard translated Blynk commands from stale connection generations",
     )
+    start_mapping = source_section(
+        commands,
+        '    if (datastream == "CmdStartRequest") {',
+        '    if (datastream == "CmdStop") {',
+    )
     failures.require(
-        "constexpr std::array<std::string_view, 10U> control_datastreams" in commands
+        "constexpr std::array<std::string_view, 9U> active_control_datastreams" in commands
+        and "constexpr std::array<std::string_view, 2U> deprecated_control_datastreams"
+            in commands
+        and '"CmdStartRequest"' in commands
+        and '"CmdStart"' in commands
+        and '"CmdStartTargetC"' in commands
+        and "BlynkCommandDecision::Deprecated" in commands
         and "blynk_inbound_capacity = 16U" in command_header
         and "blynk_inbound_capacity - 1U" in commands
         and 'datastream == "CmdStop" && payload == "1"' in commands
         and "parse_decimal_milli" in commands
-        and "void BlynkCommandMapper::disconnected()" in commands
-        and "mapper_.disconnected()" in service
+        and 'if (payload == "0")' in start_mapping
+        and "BlynkCommandDecision::Ignored" in start_mapping
+        and "pending_start_target_" not in commands
+        and "pending_start_target_" not in command_header
+        and "pending_start_target_set_" not in commands
+        and "pending_start_target_set_" not in command_header
+        and "BlynkCommandMapper::disconnected" not in commands
+        and "mapper_.disconnected()" not in service
+        and 'inbound.datastream_view() == "CmdStartRequest"' in service
+        and "start ? ids_.next_session() : 1U" in service
+        and "blynk_command_error_message(mapped.decision)" in service
+        and "if (!protocol_error.empty())" in service
+        and "mapped.decision != BlynkCommandDecision::Accepted" in service
         and "std::from_chars" not in source_section(
             commands, "parse_decimal_milli(", "parse_temperature("
         ),
-        "Blynk ingress must use the exact allowlist, fixed decimal parser, and reserved Stop slot",
+        "Blynk ingress must ignore the exact Start release, use atomic Start, explicitly reject legacy names, retain the fixed decimal parser, and reserve the Stop slot",
+    )
+    active_controls = source_section(
+        template_contract, "## Live control datastreams", "## Deprecated Start protocol"
+    )
+    failures.require(
+        "exactly 25 datastreams" in template_contract
+        and "Together with the nine\ncontrols" in template_contract
+        and active_controls.count("| `Cmd") == 9
+        and "| `CmdStartRequest` | String `0`, `1`, or `1,<target_celsius>` |"
+            in active_controls
+        and "| `CmdStart` |" not in active_controls
+        and "| `CmdStartTargetC` |" not in active_controls
+        and "## Manual Blynk Console migration" in template_contract
+        and "`0` is not a Start command" in template_contract
+        and "mode **Push**" in template_contract
+        and "ON value `1`" in template_contract
+        and "OFF value `0`" in template_contract
+        and "Web Dashboard **Switch** and **Image Button**" in template_contract
+        and "cannot bind directly to the String" in template_contract
+        and "**Text Input** or **Terminal**" in template_contract
+        and "Sync with latest server value disabled" in template_contract
+        and "does not modify Blynk Console" in template_contract,
+        "the documented Blynk contract must have 16 outputs, nine controls, an ignored release, real mobile/web widgets, fail-closed legacy names, and manual migration",
+    )
+    failures.require(
+        "test_atomic_start_release_is_noop_without_feedback" in tests
+        and "test_atomic_start_button_press_release_sequences" in tests
+        and '"", "2", "1,", ",110", "1,110,120", "1, 110", "1,+110",'
+            in tests
+        and '"1,1e2", "start,110", "1,nan"' in tests,
+        "executable M15 tests must cover release no-op, Push sequences, and the strict malformed matrix",
     )
     failures.require(
         "app::SpscCommandMailbox http_mailbox" in runtime
@@ -2641,6 +2695,9 @@ def check_m15_blynk_contract(failures: CheckFailures) -> None:
         "test_projection_connect_throttle_coalescing_and_retry",
         "test_status_timer_normalization_and_serializer_budget",
         "test_allowlisted_deterministic_command_mapping",
+        "test_atomic_start_mapping_and_strict_parser",
+        "test_legacy_start_protocol_fails_closed",
+        "test_atomic_start_feedback_and_correlation",
         "test_raw_mailbox_stop_reservation_and_concurrency",
         "test_disconnect_reconnect_boundary_discards_old_connection_state",
         "test_control_is_independent_of_blynk_transport",

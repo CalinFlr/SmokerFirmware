@@ -1255,9 +1255,9 @@ connected state, and every successful connection receives a nonzero generation.
 Both bounded Blynk command stages carry that generation. `BlynkTask` must apply
 disconnect cleanup before activating a newer generation, and `ControlTask`
 must discard a translated Blynk command whose generation is no longer current.
-Cleanup resets the pending Start parameter, results, already-selected feedback,
-events, and the callback-ordered inbound-drop watermark; it does not reject a
-new command received for the live reconnect generation.
+Cleanup resets results, already-selected feedback, events, and the callback-
+ordered inbound-drop watermark; it does not reject a new command received for
+the live reconnect generation. D060 removes the former pending Start parameter.
 
 Status: Accepted.
 
@@ -1349,5 +1349,43 @@ calibrated accuracy, controlled open/short behavior and recovery, longer-
 duration behavior, response/noise, heater interference, and independent
 electrical/thermal safety remain M6B/pre-real-heater and release gates. They do
 not block beginning ADS1115 integration.
+
+Status: Accepted.
+
+## D060 — Blynk Start is one atomic bounded request
+
+Blynk remote Start uses the single active String datastream
+`CmdStartRequest`. Exact payload `0` is the release/reset emitted by a Push UI
+and is ignored: it creates no command, application admission, correlation,
+semantic result, remote error, or state change, and cannot enable heating. Its
+Start payload is exactly `1` for the startup recipe or `1,<target_celsius>` for
+an atomic target override; strict existing decimal grammar applies, and
+`-273.1` maps to an absent chamber target. The mapper
+copies the startup recipe and constructs one `StartSessionCommand` from that
+one message. It does not use JSON, allocate parser storage, retain a pending
+target, or require disconnect cleanup for Start state.
+
+The former `CmdStart` and `CmdStartTargetC` names remain in a separate callback
+allowlist only so new firmware can reject them explicitly as deprecated. They
+cannot create, configure, or correlate semantic application work. Malformed
+atomic requests and deprecated messages emit bounded remote-error events; only
+a fully parsed atomic command enters the application mailbox and normal
+correlation tracking. Application semantic acceptance and the existing safety
+gate remain authoritative.
+
+The active template consequently contains 16 output and nine control
+datastreams, 25 total. All controls retain sync-with-latest disabled, clean
+session, QoS 0, no retain, no get/sync, no replay, generation discard, reserved
+Stop admission, and round-robin behavior. Console migration is a manual owner
+operation. The mobile app may bind a Push Button to the String control with ON
+`1` or a fixed `1,<target>`, OFF `0`, and sync disabled; arbitrary dynamic
+targets use a String input or separate presets rather than implicit slider
+composition. Standard Web Dashboard Switch/Image Button widgets are numeric and
+cannot bind directly to the String control, so web Start uses Text Input/
+Terminal or remains disabled pending a verified compatible mechanism. Migration
+creates/configures the String control first, disables legacy widgets, verifies
+Start-plus-no-op press/release, and only then installs firmware. This repository
+does not modify Blynk Console or validate broker, target, heater, or hardware-
+safety behavior.
 
 Status: Accepted.

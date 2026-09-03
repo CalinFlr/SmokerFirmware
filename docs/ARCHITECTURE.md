@@ -1039,16 +1039,37 @@ reconnect. A new live Blynk user action is required. State/configuration
 datastreams may expose current application values, but Blynk never owns the
 authoritative runtime configuration.
 
+Remote Start is one bounded `CmdStartRequest` message. Exact payload `0` is an
+ignored Push-button release/reset and creates no command, correlation, semantic
+result, remote error, or state change. Exact `1` and `1,<target_celsius>` create
+Start, with the mapper copying the startup recipe and applying any explicit
+target, including the monitoring-only sentinel, while constructing the same
+`StartSessionCommand`; it retains no cross-message Start parameter.
+The former `CmdStart` and `CmdStartTargetC` names remain callback-allowlisted
+only for explicit deprecated-protocol rejection and never reach the application
+mailbox. MQTT admission remains distinct from authoritative application
+semantic acceptance.
+
+In the mobile app, a String `CmdStartRequest` may use a Push Button with ON
+`1` or a fixed preset such as `1,110.0`, OFF `0`, and sync disabled. Arbitrary
+dynamic targets require the complete payload from a String-capable input or
+separate fixed presets; a Button does not compose a separate slider value. In
+the Web Dashboard, standard numeric Switch/Image Button widgets cannot bind to
+this String datastream, so web Start uses a String Text Input/Terminal or stays
+disabled pending a separately verified compatible mechanism. Console migration
+remains manual and Console-first; the repository performs no Console mutation.
+
 The MQTT callback records disconnect/error occurrence independently from the
 final connected state and assigns each successful connection a nonzero bounded
 generation. Therefore a disconnect followed by reconnect between two
 `BlynkTask` polls still forces old-connection cleanup before the new connection
 is activated. Raw inputs and translated Blynk mailbox commands retain their
 origin generation; `BlynkTask` and the ControlTask-side round-robin drain drop
-stale generations. Disconnect also clears the one-shot Start parameter,
-unpublished result/feedback/event state, and acknowledges the callback-ordered
-inbound-drop watermark. A command received on the new live generation remains
-processable and a new-generation mailbox drop remains observable.
+stale generations. Because Start has no cross-message state, disconnect cleanup
+only clears unpublished result/feedback/event state and acknowledges the
+callback-ordered inbound-drop watermark. A command received on the new live
+generation remains processable and a new-generation mailbox drop remains
+observable.
 
 The firmware-update control invokes the existing M13 check/install service.
 The Blynk payload contains no URL or binary; the platform continues to download
