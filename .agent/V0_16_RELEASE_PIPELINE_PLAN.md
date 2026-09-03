@@ -182,3 +182,76 @@ Closeout progress
   6.0.2. No hardware behavior was exercised or claimed.
 - Step 7 remains: commit/push, current-head CI, thread replies/resolution,
   re-review request, and final remote tag/release audit.
+
+## Independent RSA image-path closeout
+
+Goal
+
+Make the independent RSA helper pass an absolute canonical image path to
+ESP-IDF 6.0.2 and prove the build-directory execution behavior without
+triggering a release.
+
+Current repository observations
+
+- PR #12 head `2899a861df38526a7d59b4ff5ae6d0a6bb7666d4` and current `main`
+  `583176bd5b1516c735b23347447c712e82d30a39` match the expected closeout
+  state.
+- `verify-signed-artifact` passes
+  `signed-release-bundle/smoker_controller.bin`, while the helper forwards that
+  relative value unchanged to `idf.py`.
+- ESP-IDF 6.0.2 runs `espsecure` with the build directory as its working
+  directory, so the precheck and RSA tool currently resolve the same argument
+  from different directories. Ordinary PR CI does not execute this tag-only
+  path.
+
+Steps
+
+1. Keep the input separate, reject missing, non-regular, and symlink images,
+   then canonicalize the image with Python `Path.resolve(strict=True)` before
+   invoking `idf.py` or the size guard.
+2. Preserve the exact ESP-IDF version, RSA command, public key, size threshold,
+   immediate signing-job verification, and independent artifact verification.
+3. Add a no-network host harness with a fake `idf.py` that changes to `-B`,
+   rejects relative datafiles, records its arguments, and accepts only an
+   existing absolute image.
+4. Cover the workflow-relative path, absolute path, spaces, missing file,
+   directory, symlink, wrong ESP-IDF version, and a direct demonstration that
+   the simulated ESP-IDF behavior rejects the old relative argument.
+5. Integrate the harness into host verification, run the full required local
+   matrix, review scope/invariants, commit, and push.
+6. Record the cause/fix/test on PR #12, request re-review, wait for current-head
+   CI, resolve any resulting thread only after evidence, and re-audit tags,
+   releases, mergeability, and zero unresolved threads.
+
+Validation commands
+
+```text
+python3 tools/test_verify_signed_release_firmware.py
+python3 tools/test_release_bundle.py
+python3 tools/test_release_workflow.py
+python3 tools/check_release_workflow.py
+bash tools/verify.sh --host-only
+bash tools/verify.sh --idf-only
+bash tools/verify.sh
+git diff --check
+bash -n tools/verify_signed_release_firmware.sh
+```
+
+Risks / unresolved items
+
+- The fake IDF harness proves argument and working-directory semantics, not a
+  cryptographic signature. Existing ESP-IDF target checks and the unchanged
+  `secure-verify-signature` command remain the RSA mechanism evidence.
+- No tag or release workflow execution is permitted for this regression test.
+
+RSA path closeout progress
+
+- Steps 1-4 are complete. The helper rejects missing, non-regular, and symlink
+  inputs, resolves the accepted image strictly, canonicalizes the build path,
+  and passes the same absolute image to RSA and size verification.
+- Step 5 local validation is complete: the dedicated harness passes 9/9,
+  release bundle tests pass 23/23, workflow mutations pass 19/19, host and
+  sanitizer suites pass, and `--idf-only` plus the combined ESP-IDF 6.0.2
+  verification retain the 1,441,792-byte target image.
+- Step 6 remains: commit/push, PR evidence, current-head CI and re-review, then
+  the final zero-thread/tag/release/merge audit.

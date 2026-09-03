@@ -53,6 +53,7 @@ run_host_validation() {
     python3 "$repository_root/tools/check_m12_http_fixture.py"
     python3 "$repository_root/tools/test_release_bundle.py"
     python3 "$repository_root/tools/test_release_workflow.py"
+    python3 "$repository_root/tools/test_verify_signed_release_firmware.py"
 
     cmake -S "$repository_root/tests" -B "$repository_root/build-host" -G Ninja
     cmake --build "$repository_root/build-host" --clean-first
