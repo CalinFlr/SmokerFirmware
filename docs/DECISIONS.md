@@ -1417,9 +1417,11 @@ permission. It downloads the signed bundle and independently repeats strict
 manifest, SHA-256, size, identity, file-set, and RSA public-key verification.
 It then emits the verified bundle consumed by `publish`. Only `publish` has
 `contents: write`; it cannot rebuild or sign, repeats the public manifest/hash
-checks, rejects an existing release, requires the triggering tag to exist, and
-uploads only `smoker_controller.bin`, its SHA-256 sidecar, and the versioned
-manifest.
+checks, rejects an existing release, resolves the live release tag and requires
+its commit to equal the triggering `github.sha`, and uploads only
+`smoker_controller.bin`, its SHA-256 sidecar, and the versioned manifest. A
+tag-update event is rejected, and a newer same-tag run cancels an older one
+before it can publish stale artifacts.
 
 Manifest schema `smoker-firmware-release/v1` is canonical JSON with exactly
 the schema, version, tag, commit, image name, SHA-256, and image size. The

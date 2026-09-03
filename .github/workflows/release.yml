@@ -10,7 +10,7 @@ permissions:
 
 concurrency:
   group: release-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   validate:
@@ -26,15 +26,21 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Verify tag matches version.txt exactly
+        env:
+          TAG_CREATED: ${{ github.event.created }}
         shell: bash
         run: |
           set -euo pipefail
+          test "$TAG_CREATED" = "true" || {
+            echo "release workflow accepts only a newly created tag reference" >&2
+            exit 1
+          }
           test "$GITHUB_REF_NAME" = "v$(cat version.txt)" || {
             echo "tag $GITHUB_REF_NAME does not match version.txt ($(cat version.txt))" >&2
             exit 1
           }
       - name: Install host build tools
-        run: sudo apt-get update && sudo apt-get install --yes ninja-build
+        run: sudo apt-get update && sudo apt-get install --yes ninja-build ruby
       - name: Validate host behavior, sanitizers, and guardrails
         run: bash tools/verify.sh --host-only
       - name: Cross-build with ESP-IDF v6.0.2
@@ -167,6 +173,13 @@ jobs:
             --version "$(cat version.txt)" \
             --tag "$GITHUB_REF_NAME" \
             --commit "$GITHUB_SHA"
+          live_tag_commit="$(
+            gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_REF_NAME" --jq .sha
+          )"
+          if [[ "$live_tag_commit" != "$GITHUB_SHA" ]]; then
+            echo "tag $GITHUB_REF_NAME now resolves to $live_tag_commit, expected $GITHUB_SHA" >&2
+            exit 1
+          fi
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             echo "release $GITHUB_REF_NAME already exists; refusing to overwrite it" >&2
             exit 1

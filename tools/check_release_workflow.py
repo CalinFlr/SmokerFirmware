@@ -3,9 +3,12 @@
 
 from __future__ import annotations
 
+import json
 import re
+import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -28,6 +31,78 @@ OFFICIAL_ACTIONS = frozenset(
         "espressif/esp-idf-ci-action",
     }
 )
+
+PSYCH_AST_TO_JSON = r"""
+require "json"
+require "psych"
+
+def convert(node)
+  if node.respond_to?(:anchor) && node.anchor
+    raise "YAML anchors are not allowed"
+  end
+  if node.respond_to?(:tag) && node.tag
+    raise "explicit YAML tags are not allowed"
+  end
+  case node
+  when Psych::Nodes::Stream, Psych::Nodes::Document
+    raise "YAML must contain exactly one document" unless node.children.length == 1
+    convert(node.children.fetch(0))
+  when Psych::Nodes::Mapping
+    result = {}
+    node.children.each_slice(2) do |key_node, value_node|
+      raise "YAML mapping keys must be scalars" unless key_node.is_a?(Psych::Nodes::Scalar)
+      key = key_node.value
+      raise "duplicate YAML mapping key: #{key}" if result.key?(key)
+      result[key] = convert(value_node)
+    end
+    result
+  when Psych::Nodes::Sequence
+    node.children.map { |child| convert(child) }
+  when Psych::Nodes::Scalar
+    node.value
+  when Psych::Nodes::Alias
+    raise "YAML aliases are not allowed"
+  else
+    raise "unsupported YAML node: #{node.class}"
+  end
+end
+
+begin
+  print JSON.generate(convert(Psych.parse_stream(STDIN.read)))
+rescue StandardError => error
+  warn error.message
+  exit 1
+end
+"""
+
+
+class WorkflowParseError(ValueError):
+    """The workflow is not a safe, unambiguous YAML mapping."""
+
+
+def parse_workflow(source: str) -> dict[str, Any]:
+    try:
+        completed = subprocess.run(
+            ["ruby", "-e", PSYCH_AST_TO_JSON],
+            input=source,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+    except FileNotFoundError as error:
+        raise WorkflowParseError(
+            "Ruby/Psych is required for semantic YAML validation"
+        ) from error
+    if completed.returncode != 0:
+        detail = completed.stderr.strip() or "unknown Psych parse error"
+        raise WorkflowParseError(detail)
+    try:
+        parsed = json.loads(completed.stdout)
+    except json.JSONDecodeError as error:
+        raise WorkflowParseError(f"Psych result is not valid JSON: {error}") from error
+    if not isinstance(parsed, dict):
+        raise WorkflowParseError("workflow root must be a mapping")
+    return parsed
 
 
 def job_blocks(source: str) -> dict[str, str]:
@@ -62,6 +137,165 @@ def check_workflow(source: str) -> list[str]:
     def require(condition: bool, message: str) -> None:
         if not condition:
             failures.append(message)
+
+    try:
+        workflow = parse_workflow(source)
+    except WorkflowParseError as error:
+        return [f"workflow YAML is invalid or ambiguous: {error}"]
+
+    require(
+        set(workflow) == {"name", "on", "permissions", "concurrency", "jobs"},
+        "workflow must contain only name, on, permissions, concurrency, and jobs",
+    )
+    require(
+        workflow.get("on") == {"push": {"tags": ["v*.*.*"]}},
+        "workflow trigger must be exactly push tags v*.*.*",
+    )
+    require(
+        workflow.get("permissions") == {"contents": "read"},
+        "top-level permissions must be exactly contents: read",
+    )
+    require(
+        workflow.get("concurrency")
+        == {"group": "release-${{ github.ref }}", "cancel-in-progress": "true"},
+        "same-tag release runs must cancel an older in-progress run",
+    )
+
+    semantic_jobs = workflow.get("jobs")
+    if not isinstance(semantic_jobs, dict):
+        failures.append("workflow jobs must be a mapping")
+        return failures
+    require(
+        tuple(semantic_jobs) == EXPECTED_JOBS,
+        "semantic job graph must contain only validate, sign, "
+        "verify-signed-artifact, publish in order",
+    )
+    if tuple(semantic_jobs) != EXPECTED_JOBS:
+        return failures
+
+    allowed_job_keys = {
+        "validate": {"name", "runs-on", "permissions", "timeout-minutes", "steps"},
+        "sign": {
+            "name",
+            "needs",
+            "runs-on",
+            "environment",
+            "permissions",
+            "timeout-minutes",
+            "steps",
+        },
+        "verify-signed-artifact": {
+            "name",
+            "needs",
+            "runs-on",
+            "permissions",
+            "timeout-minutes",
+            "steps",
+        },
+        "publish": {
+            "name",
+            "needs",
+            "runs-on",
+            "permissions",
+            "timeout-minutes",
+            "steps",
+        },
+    }
+    expected_needs = {
+        "validate": None,
+        "sign": "validate",
+        "verify-signed-artifact": "sign",
+        "publish": "verify-signed-artifact",
+    }
+    expected_step_names = {
+        "validate": (
+            None,
+            "Verify tag matches version.txt exactly",
+            "Install host build tools",
+            "Validate host behavior, sanitizers, and guardrails",
+            "Cross-build with ESP-IDF v6.0.2",
+        ),
+        "sign": (
+            None,
+            "Build signed source again from tagged commit",
+            "Sign and verify with the release key",
+            "Create bounded release bundle",
+            "Upload signed release bundle",
+        ),
+        "verify-signed-artifact": (
+            None,
+            "Download signed release bundle",
+            "Verify bundle manifest, identity, hash, size, and file set",
+            "Repeat RSA verification using only the public key",
+            "Upload independently verified bundle",
+        ),
+        "publish": (
+            None,
+            "Download independently verified bundle",
+            "Reverify bundle and publish approved files",
+        ),
+    }
+    for name, job in semantic_jobs.items():
+        if not isinstance(job, dict):
+            failures.append(f"{name} job must be a mapping")
+            continue
+        require(
+            set(job) == allowed_job_keys[name],
+            f"{name} job keys must be exact; conditions, continue-on-error, "
+            "and alternate execution forms are forbidden",
+        )
+        require(job.get("needs") == expected_needs[name], f"{name} needs must be exact")
+        expected_permission = "write" if name == "publish" else "read"
+        require(
+            job.get("permissions") == {"contents": expected_permission},
+            f"{name} permissions must be exactly contents: {expected_permission}",
+        )
+        expected_environment = "firmware-release" if name == "sign" else None
+        require(
+            job.get("environment") == expected_environment,
+            f"{name} release environment assignment must be exact",
+        )
+        steps = job.get("steps")
+        if not isinstance(steps, list):
+            failures.append(f"{name} steps must be a sequence")
+            continue
+        require(
+            tuple(
+                step.get("name") if isinstance(step, dict) else None
+                for step in steps
+            )
+            == expected_step_names[name],
+            f"{name} steps must be the exact reviewed sequence",
+        )
+        for step in steps:
+            if not isinstance(step, dict):
+                failures.append(f"{name} step must be a mapping")
+                continue
+            require(
+                set(step) <= {"name", "uses", "with", "env", "run", "shell"},
+                f"{name} steps must not use conditions, continue-on-error, or unknown keys",
+            )
+
+        checkout_steps = [
+            step
+            for step in steps
+            if isinstance(step, dict)
+            and isinstance(step.get("uses"), str)
+            and step["uses"].startswith("actions/checkout@")
+        ]
+        require(len(checkout_steps) == 1, f"{name} must have exactly one semantic checkout")
+        if len(checkout_steps) == 1:
+            checkout_with = checkout_steps[0].get("with")
+            require(
+                checkout_with
+                == {
+                    "ref": "${{ github.sha }}",
+                    "fetch-depth": "0",
+                    "persist-credentials": "false",
+                },
+                f"{name} checkout inputs must pin github.sha, fetch full tag "
+                "history, and disable credential persistence",
+            )
 
     try:
         jobs = job_blocks(source)
@@ -144,7 +378,16 @@ def check_workflow(source: str) -> list[str]:
     require("tools/release_bundle.py verify" in verify, "independent verification must verify the strict bundle")
     require("tools/verify_signed_release_firmware.sh" in verify, "independent verification must repeat public-key RSA verification")
     require("tools/release_bundle.py verify" in publish, "publish must reverify hash and manifest")
+    require("github.event.created" in validate, "validate must reject tag-update events")
     require("gh release view" in publish, "publish must refuse an existing release")
+    require(
+        "gh api" in publish and "commits/$GITHUB_REF_NAME" in publish,
+        "publish must resolve the live release tag commit",
+    )
+    require(
+        "$live_tag_commit" in publish and '"$GITHUB_SHA"' in publish,
+        "publish must compare the live tag commit with github.sha",
+    )
     require("--verify-tag" in publish, "publish must require the triggering tag to exist")
     require("smoker_controller.bin" in source, "fixed OTA image name must remain smoker_controller.bin")
     require("smoker_controller.manifest.json" in publish, "publish must allowlist the versioned manifest")

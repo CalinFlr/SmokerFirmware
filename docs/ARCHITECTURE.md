@@ -885,9 +885,12 @@ temporary copy. The next job downloads a strict three-file bundle and, without
 the environment or secret, independently checks its canonical manifest,
 version, tag, commit, file set, SHA-256, size, and RSA signature. `publish`
 downloads only that independently verified bundle, repeats its public metadata
-checks, refuses an existing release, and uploads only the fixed OTA image,
-SHA-256 sidecar, and manifest. Hardware Secure Boot and flash encryption remain
-separate physical/flash-write threat controls and are not enabled by M13.
+checks, resolves the live release tag and requires its commit to remain the
+triggering `github.sha`, refuses an existing release, and uploads only the fixed
+OTA image, SHA-256 sidecar, and manifest. A tag-update event is rejected and a
+newer same-tag run cancels its predecessor. Hardware Secure Boot and flash
+encryption remain separate physical/flash-write threat controls and are not
+enabled by M13.
 
 Because ESP-IDF generates serial flash targets even for those unsigned builds,
 the project attaches a fail-closed prerequisite to `flash`, `app-flash`,

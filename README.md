@@ -391,8 +391,11 @@ SHA-256, and size. The manifest and hash detect corruption or inconsistent
 transport metadata; they do not replace the RSA-3072 publisher signature.
 Only the signing step receives the private key and only `publish` receives
 `contents: write`, so no job has both privileges. The workflow does not create,
-move, or push a tag; `--verify-tag` makes publication require the triggering
-tag, and an existing release is rejected rather than overwritten.
+move, or push a tag. A tag-update event is rejected, a newer run for the same
+tag cancels the older run, and `publish` resolves the live tag immediately
+before publication and requires its commit to equal the triggering
+`github.sha`. `--verify-tag` requires the tag to exist, and an existing release
+is rejected rather than overwritten.
 
 ### v0.16.0 release runbook
 
@@ -403,7 +406,10 @@ tag, and an existing release is rejected rather than overwritten.
 4. Explicitly create and push `v0.16.0` on that exact commit; do not move or
    reuse `v0.15.0`.
 5. Let the tag workflow complete its unprivileged `validate` job.
-6. Approve the `firmware-release` environment so only `sign` can use the key.
+6. Under the current D051 single-maintainer exception, expect no approval
+   pause: after `validate`, the tag-restricted `firmware-release` environment
+   automatically admits only `sign` to use the key. Stop if repository or
+   release-tag write access is no longer limited to that maintainer.
 7. Require `verify-signed-artifact` to independently validate the downloaded
    signed bundle using the repository public key.
 8. Let the separate `publish` job revalidate and create the new GitHub Release.
@@ -497,9 +503,10 @@ independent approval.
 
 ## Native host tests
 
-The host tests use CMake, CTest, and the native C++ compiler. They do not link
-ESP-IDF or require an ESP32. After activating the local tools above (or providing
-CMake 3.22+ and Ninja independently), run:
+The host tests use CMake, CTest, the native C++ compiler, and Ruby/Psych for
+semantic release-workflow validation. They do not link ESP-IDF or require an
+ESP32. After activating the local tools above (or providing CMake 3.22+, Ninja,
+and Ruby independently), run:
 
 ```sh
 cmake -S tests -B build-host -G Ninja
@@ -567,6 +574,16 @@ is rejected. The dependency-free Python checks can also be run directly:
 python3 tools/check_architecture.py
 python3 tools/check_traceability.py
 python3 tools/check_partitions.py partitions.csv
+```
+
+The host-only release guard safely parses the workflow through Ruby/Psych and
+then validates its exact trigger, job graph, permissions, environment,
+dependencies, conditions, checkout inputs, and pinned actions without network
+access:
+
+```sh
+python3 tools/check_release_workflow.py
+python3 tools/test_release_workflow.py
 ```
 
 After an ESP-IDF build, run:

@@ -13,6 +13,8 @@ from release_bundle import (
     CHECKSUM_NAME,
     IMAGE_NAME,
     MANIFEST_NAME,
+    OTA_SLOT_SIZE,
+    SCHEMA,
     canonical_manifest_bytes,
     create_bundle,
     validate_semver,
@@ -76,6 +78,32 @@ class ReleaseBundleTests(unittest.TestCase):
     def test_wrong_commit(self) -> None:
         self.rewrite_manifest(commit="f" * 40)
         self.assert_rejected()
+
+    def test_wrong_schema(self) -> None:
+        self.rewrite_manifest(schema=f"{SCHEMA}-unknown")
+        self.assert_rejected()
+
+    def test_invalid_declared_sizes(self) -> None:
+        actual_size = (self.bundle / IMAGE_NAME).stat().st_size
+        for invalid_size in (True, 0, -1, str(actual_size), actual_size + 1):
+            with self.subTest(size=invalid_size):
+                self.rewrite_manifest(size=invalid_size)
+                self.assert_rejected()
+
+    def test_declared_size_beyond_ota_slot(self) -> None:
+        self.rewrite_manifest(size=OTA_SLOT_SIZE + 1)
+        self.assert_rejected()
+
+    def test_create_rejects_image_beyond_ota_slot(self) -> None:
+        self.image.write_bytes(b"x" * (OTA_SLOT_SIZE + 1))
+        with self.assertRaises(BundleError):
+            create_bundle(
+                self.image,
+                self.root / "oversized-bundle",
+                VERSION,
+                TAG,
+                COMMIT,
+            )
 
     def test_checksum_sidecar_mismatch(self) -> None:
         (self.bundle / CHECKSUM_NAME).write_text(
@@ -150,6 +178,32 @@ class ReleaseBundleTests(unittest.TestCase):
     def test_invalid_manifest(self) -> None:
         (self.bundle / MANIFEST_NAME).write_text("{not-json}\n", encoding="utf-8")
         self.assert_rejected()
+
+    def test_duplicate_manifest_field(self) -> None:
+        path = self.bundle / MANIFEST_NAME
+        raw = path.read_text(encoding="utf-8")
+        path.write_text(
+            raw.replace(
+                '{"commit":',
+                '{"commit":"' + ("f" * 40) + '","commit":',
+                1,
+            ),
+            encoding="utf-8",
+        )
+        self.assert_rejected()
+
+    def test_symlinked_bundle_members(self) -> None:
+        for name in (IMAGE_NAME, CHECKSUM_NAME, MANIFEST_NAME):
+            with self.subTest(name=name):
+                path = self.bundle / name
+                original = path.read_bytes()
+                target = self.root / f"{name}.target"
+                target.write_bytes(original)
+                path.unlink()
+                path.symlink_to(target)
+                self.assert_rejected()
+                path.unlink()
+                path.write_bytes(original)
 
     def test_oversized_manifest(self) -> None:
         (self.bundle / MANIFEST_NAME).write_bytes(b" " * 1025)

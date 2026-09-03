@@ -49,7 +49,8 @@ moving any tag or publishing a release.
 ## Assumptions
 
 - `firmware-release` continues to hold only the existing
-  `SMOKER_OTA_SIGNING_KEY_B64` secret and any configured approval policy.
+  `SMOKER_OTA_SIGNING_KEY_B64` secret and tag deployment policy. D051 records
+  that it currently has no required reviewer.
 - GitHub artifact upload/download are acceptable transient transport between
   isolated jobs when pinned to immutable official-action SHAs.
 - A ZIP artifact is transport only; the bounded release bundle is the strict
@@ -123,3 +124,61 @@ exact version. No release workflow will be triggered as a test.
   push- and pull-request-triggered host/ESP-IDF checks passed. Remote checks
   confirmed that `v0.15.0` did not move, `v0.16.0` and its release do not
   exist, and the PR remains open and unmerged.
+
+## Review closeout
+
+Goal
+
+Close the four current PR #12 review threads without widening the release
+scope or creating a tag, release, or merge.
+
+Current repository observations
+
+- PR #12 head is `cfad0ee9e26912b4ceee68e32698484d86d66361`; current `main`
+  remains its base at `583176bd5b1516c735b23347447c712e82d30a39`.
+- All four threads are current, unresolved, and valid: live tag/commit binding,
+  semantic workflow validation, the nonexistent environment approval step,
+  and missing bundle invariant fixtures.
+- The `firmware-release` environment restricts deployment to `v*.*.*` tags and
+  owns the signing secret, but has no required reviewer under D051.
+
+Steps
+
+1. Make stale tag-push runs fail closed by cancelling an older same-tag run,
+   requiring a newly created tag event, and comparing the live peeled tag
+   commit with `GITHUB_SHA` immediately before publication.
+2. Replace string-presence-only workflow assertions with a safe semantic YAML
+   structure parse plus exact trigger, job graph, permissions, environment,
+   dependency, condition, and checkout assertions; retain source checks where
+   comments or command placement are intentionally relevant.
+3. Add no-network workflow mutations for extra triggers, dependency bypass,
+   extra permissions, duplicate YAML keys, and removal of the live tag check.
+4. Correct the runbook and PR description to state the actual D051 automatic
+   environment admission instead of claiming a nonexistent approval pause.
+5. Add bundle fixtures for schema, size, duplicate-key, and symlink rejection.
+6. Run both fixture suites, host-only, IDF-only, combined verification, and
+   `git diff --check`; review the complete branch diff and invariants.
+7. Commit and push the closeout, wait for current-head CI, reply to and resolve
+   each thread with its evidence, request re-review, and recheck tags/releases.
+
+Risks / unresolved items
+
+- A publish-time live-tag comparison closes the stale-run mismatch window but
+  does not make tags immutable after publication. Repository tag protection is
+  operational defense in depth and remains outside this source-only closeout.
+- Ruby Psych is already used to syntax-check this workflow locally. The
+  executable guard will use its AST to preserve the literal `on` key, reject
+  aliases and duplicate mappings, and avoid YAML 1.1 boolean-key ambiguity.
+
+Closeout progress
+
+- Steps 1-5 are complete. The workflow rejects tag-update events, cancels an
+  older same-tag run, compares the live peeled tag commit before publication,
+  and retains the original four-job privilege chain. The host guard now parses
+  YAML structure through Psych and rejects the reviewed semantic bypasses.
+- Step 6 is complete: bundle fixtures pass 23/23, workflow mutations pass
+  19/19, `tools/verify.sh --host-only`, `--idf-only`, and the combined command
+  pass, and the unchanged target image remains 1,441,792 bytes under ESP-IDF
+  6.0.2. No hardware behavior was exercised or claimed.
+- Step 7 remains: commit/push, current-head CI, thread replies/resolution,
+  re-review request, and final remote tag/release audit.
