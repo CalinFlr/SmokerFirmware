@@ -44,8 +44,16 @@ run_host_validation() {
         echo "ninja is required for host validation" >&2
         exit 1
     }
+    command -v ruby >/dev/null 2>&1 || {
+        echo "Ruby/Psych is required for release-workflow validation" >&2
+        exit 1
+    }
 
+    python3 "$repository_root/tools/check_release_workflow.py"
     python3 "$repository_root/tools/check_m12_http_fixture.py"
+    python3 "$repository_root/tools/test_release_bundle.py"
+    python3 "$repository_root/tools/test_release_workflow.py"
+    python3 "$repository_root/tools/test_verify_signed_release_firmware.py"
 
     cmake -S "$repository_root/tests" -B "$repository_root/build-host" -G Ninja
     cmake --build "$repository_root/build-host" --clean-first

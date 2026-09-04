@@ -660,6 +660,9 @@ def check_m12_transport_contract(failures: CheckFailures) -> None:
     partitions = (ROOT / "partitions.csv").read_text()
     verification = (ROOT / "tools/verify.sh").read_text()
     release_signing = (ROOT / "tools/sign_release_firmware.sh").read_text()
+    release_verification = (
+        ROOT / "tools/verify_signed_release_firmware.sh"
+    ).read_text()
     effective_config = (ROOT / "tools/check_effective_sdkconfig.py").read_text()
     serial_flash = (ROOT / "tools/flash_signed_firmware.py").read_text()
     failures.require(
@@ -691,7 +694,9 @@ def check_m12_transport_contract(failures: CheckFailures) -> None:
         and "smoker_ota_signing_public.pem" in release_signing
         and "check_effective_sdkconfig.py" in release_signing
         and "secure-sign-data" in release_signing
-        and "secure-verify-signature" in release_signing
+        and "verify_signed_release_firmware.sh" in release_signing
+        and "secure-verify-signature" in release_verification
+        and "smoker_ota_signing_public.pem" in release_verification
         and 'rm -f "$signing_key"' in release_signing
         and 'chmod 0644 "$signed_image"' in release_signing,
         "M13 release signing must isolate the private key, verify against the public key, and publish a readable artifact",
@@ -779,8 +784,8 @@ def check_m12_transport_contract(failures: CheckFailures) -> None:
     decisions = (ROOT / "docs/DECISIONS.md").read_text()
     decision_ids = [int(value) for value in re.findall(r"^## D(\d{3})\b", decisions, re.MULTILINE)]
     failures.require(
-        decision_ids == list(range(1, 61)),
-        f"decision IDs must remain ordered and contiguous through D060; found {decision_ids}",
+        decision_ids == list(range(1, 62)),
+        f"decision IDs must remain ordered and contiguous through D061; found {decision_ids}",
     )
     failures.require(
         "## D051 — Missing independent release review is conditional on single-maintainer access"
@@ -797,6 +802,14 @@ def check_m12_transport_contract(failures: CheckFailures) -> None:
         and "exactly one root commit" in decisions
         and "must never turn every commit into" in decisions,
         "D052 must preserve public credential-free distribution and sanitized-root history",
+    )
+    failures.require(
+        "## D061 — Release signing, verification, and publication use separate jobs"
+        in decisions
+        and "validate -> sign -> verify-signed-artifact -> publish" in decisions
+        and "smoker-firmware-release/v1" in decisions
+        and "must not be moved or reused" in decisions,
+        "D061 must preserve release job isolation, strict bundle identity, and historical tag immutability",
     )
     failures.require(
         "## D053 — M14 uses a bounded raw-flash circular session history" in decisions
@@ -888,7 +901,7 @@ def check_m12_transport_contract(failures: CheckFailures) -> None:
         path.read_text() for path in sorted((ROOT / ".github/workflows").glob("*.yml"))
     )
     failures.require(
-        "ubuntu-latest" not in workflow and workflow.count("runs-on: ubuntu-24.04") == 3,
+        "ubuntu-latest" not in workflow and workflow.count("runs-on: ubuntu-24.04") == 6,
         "CI jobs must use the explicit ubuntu-24.04 runner",
     )
     action_references = re.findall(r"^\s*-?\s*uses:\s*([^\s#]+)", workflow, re.MULTILINE)
@@ -1016,15 +1029,22 @@ def check_m12_transport_contract(failures: CheckFailures) -> None:
     )
     failures.require(
         'tags:\n      - "v*.*.*"' in release
-        and 'test "$GITHUB_REF_NAME" = "v$version"' in release
+        and 'test "$GITHUB_REF_NAME" = "v$(cat version.txt)"' in release
+        and "  validate:" in release
+        and "  sign:" in release
+        and "  verify-signed-artifact:" in release
+        and "  publish:" in release
         and "environment: firmware-release" in release
         and "secrets.SMOKER_OTA_SIGNING_KEY_B64" in release
         and "extra_docker_args: --env SMOKER_OTA_SIGNING_KEY_B64" in release
         and "tools/sign_release_firmware.sh" in release
+        and "tools/verify_signed_release_firmware.sh" in release
+        and "tools/release_bundle.py verify" in release
+        and "tools/check_release_workflow.py" in verification
         and "cp build-verify/smoker_controller.bin" not in release
         and "gh release create" in release
         and "smoker_controller.bin.sha256" in release,
-        "M13 release must sign in a tag-restricted environment and publish only the verified image",
+        "M13 release must validate, sign, independently verify, and publish only the bounded verified bundle",
     )
 
 

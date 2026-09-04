@@ -5,6 +5,10 @@ CONFIG_SPIRAM=y
 CONFIG_SPIRAM_MODE_OCT=y
 CONFIG_SPIRAM_SPEED_80M=y
 
+# Release verification rebuilds the exact tagged source without the signing
+# secret and compares it byte-for-byte with the RSA-authenticated payload.
+CONFIG_APP_REPRODUCIBLE_BUILD=y
+
 # M14 retains two explicit 3 MiB application slots and adds a 4 MiB raw history
 # partition on the target-confirmed 16 MiB
 # flash. The first deployment from M12 requires a complete serial flash because

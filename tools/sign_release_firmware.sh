@@ -63,16 +63,14 @@ idf.py -B "$build_dir" secure-sign-data \
     --output "$signed_image" \
     "$unsigned_image"
 
-# Verification against the repository-owned public key both proves that the
-# output is signed and prevents an accidentally replaced CI secret from
-# publishing an update which every installed device would reject.
-idf.py -B "$build_dir" secure-verify-signature \
-    --keyfile "$public_key" \
-    "$signed_image"
-python3 "$repository_root/tools/check_firmware_size.py" \
+# Immediate verification against the repository-owned public key both proves
+# that the output is signed and prevents an accidentally replaced CI secret
+# from producing an update which every installed device would reject. The same
+# public-key-only helper is run again in the independent verification job.
+SMOKER_RELEASE_BUILD_DIR="$build_dir" \
+    "$repository_root/tools/verify_signed_release_firmware.sh" \
     "$signed_image" \
-    --partition-size 3145728 \
-    --maximum-used-percent 75
+    "$unsigned_image"
 chmod 0644 "$signed_image"
 
 echo "Signed release firmware verified against keys/smoker_ota_signing_public.pem"

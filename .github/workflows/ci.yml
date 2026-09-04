@@ -19,8 +19,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - name: Install Ninja
-        run: sudo apt-get update && sudo apt-get install --yes ninja-build
+      - name: Install host build tools
+        run: sudo apt-get update && sudo apt-get install --yes ninja-build ruby
       - name: Verify host behavior, sanitizers, and architecture
         run: bash tools/verify.sh --host-only
 

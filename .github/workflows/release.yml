@@ -6,43 +6,73 @@ on:
       - "v*.*.*"
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
-  release:
-    name: Validate and publish firmware
+  validate:
+    name: Validate tagged firmware
     runs-on: ubuntu-24.04
-    environment: firmware-release
+    permissions:
+      contents: read
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
+          ref: ${{ github.sha }}
           fetch-depth: 0
-      - name: Verify tag matches version.txt
+          persist-credentials: false
+      - name: Verify tag matches version.txt exactly
+        env:
+          TAG_CREATED: ${{ github.event.created }}
         shell: bash
         run: |
           set -euo pipefail
-          version="$(tr -d '[:space:]' < version.txt)"
-          test "$GITHUB_REF_NAME" = "v$version" || {
-            echo "tag $GITHUB_REF_NAME does not match version.txt ($version)" >&2
+          test "$TAG_CREATED" = "true" || {
+            echo "release workflow accepts only a newly created tag reference" >&2
+            exit 1
+          }
+          test "$GITHUB_REF_NAME" = "v$(cat version.txt)" || {
+            echo "tag $GITHUB_REF_NAME does not match version.txt ($(cat version.txt))" >&2
             exit 1
           }
       - name: Install host build tools
-        run: sudo apt-get update && sudo apt-get install --yes ninja-build
-      - name: Validate host behavior and guardrails
+        run: sudo apt-get update && sudo apt-get install --yes ninja-build ruby
+      - name: Validate host behavior, sanitizers, and guardrails
         run: bash tools/verify.sh --host-only
-      - name: Build ESP32-S3 firmware with ESP-IDF v6.0.2
+      - name: Cross-build with ESP-IDF v6.0.2
         uses: espressif/esp-idf-ci-action@e6f5c74232b1ccd4c97ed641f1e48553853f1fd5 # v1.2.0
         with:
           esp_idf_version: v6.0.2
           target: esp32s3
           path: .
           command: bash tools/verify.sh --idf-only
-      - name: Sign and verify the release image
+
+  sign:
+    name: Rebuild and sign tagged firmware
+    needs: validate
+    runs-on: ubuntu-24.04
+    environment: firmware-release
+    permissions:
+      contents: read
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Build signed source again from tagged commit
+        uses: espressif/esp-idf-ci-action@e6f5c74232b1ccd4c97ed641f1e48553853f1fd5 # v1.2.0
+        with:
+          esp_idf_version: v6.0.2
+          target: esp32s3
+          path: .
+          command: bash tools/verify.sh --idf-only
+      - name: Sign and verify with the release key
         uses: espressif/esp-idf-ci-action@e6f5c74232b1ccd4c97ed641f1e48553853f1fd5 # v1.2.0
         env:
           SMOKER_OTA_SIGNING_KEY_B64: ${{ secrets.SMOKER_OTA_SIGNING_KEY_B64 }}
@@ -52,18 +82,144 @@ jobs:
           path: .
           extra_docker_args: --env SMOKER_OTA_SIGNING_KEY_B64
           command: bash tools/sign_release_firmware.sh
-      - name: Package release assets
+      - name: Create bounded release bundle
         shell: bash
         run: |
           set -euo pipefail
-          test -s smoker_controller.bin
-          sha256sum smoker_controller.bin > smoker_controller.bin.sha256
-      - name: Publish GitHub Release assets
+          python3 tools/release_bundle.py create \
+            --image smoker_controller.bin \
+            --output-dir release-bundle \
+            --version "$(cat version.txt)" \
+            --tag "$GITHUB_REF_NAME" \
+            --commit "$GITHUB_SHA"
+      - name: Upload signed release bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: signed-release-bundle-${{ github.sha }}
+          path: release-bundle/
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+  verify-signed-artifact:
+    name: Independently verify signed artifact
+    needs: sign
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      image_sha256: ${{ steps.verified_image.outputs.sha256 }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Rebuild independent unsigned reference
+        uses: espressif/esp-idf-ci-action@e6f5c74232b1ccd4c97ed641f1e48553853f1fd5 # v1.2.0
+        with:
+          esp_idf_version: v6.0.2
+          target: esp32s3
+          path: .
+          command: bash tools/verify.sh --idf-only
+      - name: Download signed release bundle
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: signed-release-bundle-${{ github.sha }}
+          path: signed-release-bundle
+      - name: Verify bundle manifest, identity, hash, size, and file set
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/release_bundle.py verify \
+            --bundle-dir signed-release-bundle \
+            --version "$(cat version.txt)" \
+            --tag "$GITHUB_REF_NAME" \
+            --commit "$GITHUB_SHA"
+      - name: Repeat RSA verification using only the public key
+        uses: espressif/esp-idf-ci-action@e6f5c74232b1ccd4c97ed641f1e48553853f1fd5 # v1.2.0
+        with:
+          esp_idf_version: v6.0.2
+          target: esp32s3
+          path: .
+          command: bash tools/verify_signed_release_firmware.sh signed-release-bundle/smoker_controller.bin build-verify/smoker_controller.bin
+      - name: Record independently verified image digest
+        id: verified_image
+        shell: bash
+        run: |
+          set -euo pipefail
+          image_sha256="$(
+            python3 -c 'import hashlib, pathlib, sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' \
+              signed-release-bundle/smoker_controller.bin
+          )"
+          printf 'sha256=%s\n' "$image_sha256" >> "$GITHUB_OUTPUT"
+      - name: Upload independently verified bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: verified-release-bundle-${{ github.sha }}
+          path: signed-release-bundle/
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+  publish:
+    name: Publish verified firmware
+    needs: verify-signed-artifact
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Download independently verified bundle
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: verified-release-bundle-${{ github.sha }}
+          path: verified-release-bundle
+      - name: Reverify bundle and publish approved files
         env:
           GH_TOKEN: ${{ github.token }}
+          VERIFIED_IMAGE_SHA256: ${{ needs['verify-signed-artifact'].outputs.image_sha256 }}
         shell: bash
         run: |
           set -euo pipefail
+          [[ "$VERIFIED_IMAGE_SHA256" =~ ^[0-9a-f]{64}$ ]] || {
+            echo "independently verified image digest is missing or invalid" >&2
+            exit 1
+          }
+          downloaded_image_sha256="$(
+            python3 -c 'import hashlib, pathlib, sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' \
+              verified-release-bundle/smoker_controller.bin
+          )"
+          if [[ "$downloaded_image_sha256" != "$VERIFIED_IMAGE_SHA256" ]]; then
+            echo "downloaded image does not match the independently verified digest" >&2
+            exit 1
+          fi
+          python3 tools/release_bundle.py verify \
+            --bundle-dir verified-release-bundle \
+            --version "$(cat version.txt)" \
+            --tag "$GITHUB_REF_NAME" \
+            --commit "$GITHUB_SHA"
+          live_tag_commit="$(
+            gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_REF_NAME" --jq .sha
+          )"
+          if [[ "$live_tag_commit" != "$GITHUB_SHA" ]]; then
+            echo "tag $GITHUB_REF_NAME now resolves to $live_tag_commit, expected $GITHUB_SHA" >&2
+            exit 1
+          fi
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "release $GITHUB_REF_NAME already exists; refusing to overwrite it" >&2
+            exit 1
+          fi
           gh release create "$GITHUB_REF_NAME" \
-            smoker_controller.bin smoker_controller.bin.sha256 \
-            --verify-tag --title "$GITHUB_REF_NAME" --generate-notes
+            verified-release-bundle/smoker_controller.bin \
+            verified-release-bundle/smoker_controller.bin.sha256 \
+            verified-release-bundle/smoker_controller.manifest.json \
+            --verify-tag \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes

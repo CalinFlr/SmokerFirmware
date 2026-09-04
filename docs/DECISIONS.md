@@ -1389,3 +1389,64 @@ does not modify Blynk Console or validate broker, target, heater, or hardware-
 safety behavior.
 
 Status: Accepted.
+
+## D061 — Release signing, verification, and publication use separate jobs
+
+The next release line is `0.16.0`. The already occupied `v0.15.0` tag remains
+historical at its older commit and must not be moved or reused for newer
+firmware. Preparing `0.16.0` changes no tag or release by itself; a maintainer
+must deliberately create `v0.16.0` on the intended commit after preparation is
+merged and the manual Blynk Console migration has been verified.
+
+The tag-triggered workflow has exactly four privilege boundaries:
+
+```text
+validate -> sign -> verify-signed-artifact -> publish
+```
+
+Every job checks out the exact triggering `github.sha` with persisted checkout
+credentials disabled. `validate` has read-only contents permission, no release
+environment, and runs host tests, sanitizers, guardrails, and the exact ESP-IDF
+6.0.2 cross-build. `sign` depends on it, rebuilds the same source, and alone
+uses `firmware-release`; the private-key secret exists only in its signing step.
+The signer has no write permission, immediately verifies its output using the
+versioned public key, and emits a bounded bundle rather than publishing.
+
+`verify-signed-artifact` has neither the environment, secret, nor write
+permission. It first reproducibly rebuilds the exact triggering checkout
+without a signing key, then downloads the signed bundle and independently
+repeats strict manifest, SHA-256, size, identity, file-set, and RSA public-key
+verification. ESP Secure Boot v2 authenticates the sector-aligned application
+payload and appends exactly one 4 KiB signature sector; the verifier requires
+that entire authenticated payload to equal the independent build byte for
+byte. A substituted older image signed by the same key therefore fails even if
+its transported manifest and checksum are rewritten. The job exports the
+verified image SHA-256 through the trusted workflow control plane and emits the
+verified bundle consumed by `publish`; after the second artifact download,
+`publish` requires the image to match that exact output before its public
+bundle checks. Only `publish` has
+`contents: write`; it cannot rebuild or sign, repeats the public manifest/hash
+checks, rejects an existing release, resolves the live release tag and requires
+its commit to equal the triggering `github.sha`, and uploads only
+`smoker_controller.bin`, its SHA-256 sidecar, and the versioned manifest. A
+tag-update event is rejected, and a newer same-tag run cancels an older one
+before it can publish stale artifacts.
+
+Manifest schema `smoker-firmware-release/v1` is canonical JSON with exactly
+the schema, version, tag, commit, image name, SHA-256, and image size. The
+bundle contains exactly the image, sidecar, and manifest. SHA-256 and the
+manifest provide deterministic integrity and identity binding but do not
+replace RSA-3072 publisher authentication.
+
+`CONFIG_APP_REPRODUCIBLE_BUILD=y` removes build date, time, and path variation
+so the isolated signing and verification jobs can derive the same unsigned
+application bytes from the same exact checkout. This changes build metadata,
+not controller behavior.
+
+This separation prevents one job from holding both the signing key and release
+write authority. It does not eliminate D050/D051's residual risks: losing the
+key prevents future compatible OTA releases, and compromise of the key or the
+single maintainer's release authority remains consequential. Hardware Secure
+Boot and flash encryption remain disabled and out of scope.
+
+Status: Accepted.
