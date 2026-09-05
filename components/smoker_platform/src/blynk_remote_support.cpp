@@ -365,12 +365,24 @@ bool BlynkRemoteProjection::dirty() const noexcept { return dirty_; }
 
 bool BlynkCommandResults::track(const std::uint32_t correlation_id) noexcept
 {
-    if (correlation_id == 0U || pending_count_ == capacity) return false;
+    if (correlation_id == 0U || pending_count_ + feedback_count_ >= capacity) {
+        return false;
+    }
     if (std::find(pending_.begin(), pending_.begin() + pending_count_, correlation_id)
         != pending_.begin() + pending_count_) {
         return true;
     }
     pending_[pending_count_++] = correlation_id;
+    return true;
+}
+
+bool BlynkCommandResults::cancel(const std::uint32_t correlation_id) noexcept
+{
+    const auto end = pending_.begin() + pending_count_;
+    const auto found = std::find(pending_.begin(), end, correlation_id);
+    if (found == end) return false;
+    std::move(found + 1, end, found);
+    --pending_count_;
     return true;
 }
 
@@ -382,20 +394,29 @@ void BlynkCommandResults::observe(
         const auto end = pending_.begin() + pending_count_;
         const auto found = std::find(pending_.begin(), end, result.correlation_id);
         if (found == end) continue;
-        if (!enqueue(BlynkCommandFeedback{
+        if (!resolve_tracked(BlynkCommandFeedback{
             result.correlation_id,
             result.semantic_accepted
                 ? BlynkCommandResultKind::SemanticAccepted
                 : BlynkCommandResultKind::SemanticRejected,
         })) {
-            // Keep the correlation pending until the fixed feedback queue has
-            // room. This avoids turning a transient MQTT backlog into a lost
-            // semantic result.
+            // The shared reservation invariant makes this unreachable for a
+            // tracked ID. Preserve the ID if a future caller violates it.
             continue;
         }
-        std::move(found + 1, end, found);
-        --pending_count_;
     }
+}
+
+bool BlynkCommandResults::resolve_service_result(
+    const std::uint32_t correlation_id,
+    const bool accepted
+) noexcept
+{
+    return resolve_tracked(BlynkCommandFeedback{
+        correlation_id,
+        accepted ? BlynkCommandResultKind::ServiceAccepted
+                 : BlynkCommandResultKind::ServiceRejected,
+    });
 }
 
 bool BlynkCommandResults::record_service_result(
@@ -412,9 +433,24 @@ bool BlynkCommandResults::record_service_result(
 
 bool BlynkCommandResults::enqueue(const BlynkCommandFeedback feedback) noexcept
 {
-    if (feedback_count_ == capacity || feedback.correlation_id == 0U) return false;
+    if (pending_count_ + feedback_count_ >= capacity
+        || feedback.correlation_id == 0U) return false;
     feedback_[(feedback_head_ + feedback_count_) % capacity] = feedback;
     ++feedback_count_;
+    return true;
+}
+
+bool BlynkCommandResults::resolve_tracked(
+    const BlynkCommandFeedback feedback
+) noexcept
+{
+    const auto end = pending_.begin() + pending_count_;
+    const auto found = std::find(pending_.begin(), end, feedback.correlation_id);
+    if (found == end || feedback_count_ >= capacity) return false;
+    feedback_[(feedback_head_ + feedback_count_) % capacity] = feedback;
+    ++feedback_count_;
+    std::move(found + 1, end, found);
+    --pending_count_;
     return true;
 }
 

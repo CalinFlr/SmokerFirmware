@@ -448,6 +448,22 @@ def check_m12_transport_contract(failures: CheckFailures) -> None:
         ) is not None,
         "the only auxiliary network task must be a static 4 KiB captive DNS task on core 0",
     )
+    dns_shutdown = source_section(
+        connectivity,
+        "void stop_dns_responder() noexcept",
+        "void reap_exited_dns_task() noexcept",
+    )
+    failures.require(
+        "wait_for_captive_dns_shutdown(" in dns_shutdown
+        and "return esp_timer_get_time();" in dns_shutdown
+        and "!dns_task_exited_.load(std::memory_order_acquire)" in dns_shutdown
+        and "dns_task_.load(std::memory_order_acquire) != nullptr" in dns_shutdown
+        and "vTaskDelay(static_cast<TickType_t>(ticks));" in dns_shutdown
+        and "pdMS_TO_TICKS" not in dns_shutdown
+        and dns_shutdown.find("reap_exited_dns_task();")
+            > dns_shutdown.find("wait_for_captive_dns_shutdown("),
+        "DNS shutdown must use the host-tested monotonic wait with real RTOS ticks before reaping static task storage",
+    )
     failures.require(
         connectivity.count('std::pair{"/api/v1/network/scan",') == 2
         and "ESP_NETIF_CAPTIVEPORTAL_URI" in connectivity
@@ -1363,6 +1379,19 @@ def check_m7_max31865_contract(failures: CheckFailures) -> None:
         and "chamber_backend.shutdown()" in runtime,
         "the SPI bus must precede descriptor creation, bootstrap readiness must precede ControlTask, and descriptor shutdown must precede bus destruction",
     )
+    bootstrap_wait = source_section(
+        runtime,
+        "bool wait_for_first_max31865_sample_boundary(",
+        "bool subscribe_control_loop_to_watchdog()",
+    )
+    failures.require(
+        "max31865_bootstrap_delay_ticks(" in bootstrap_wait
+        and "configTICK_RATE_HZ" in bootstrap_wait
+        and "vTaskDelay(static_cast<TickType_t>(wait_ticks));" in bootstrap_wait
+        and "return clock.now() >= boundary;" in bootstrap_wait
+        and "pdMS_TO_TICKS" not in bootstrap_wait,
+        "MAX31865 bootstrap must use the tick-phase-tested delay calculation and retain the monotonic deadline check",
+    )
     startup = source_section(
         runtime,
         "bool start_ordinary_runtime(",
@@ -1551,6 +1580,7 @@ def check_m7_max31865_contract(failures: CheckFailures) -> None:
 
     for evidence in (
         "test_max31865_configuration_policy_requires_explicit_valid_values",
+        "test_max31865_bootstrap_wait_covers_every_tick_phase",
         "test_max31865_60_hz_first_conversion_boundary",
         "test_max31865_50_hz_first_conversion_boundary",
         "test_max31865_initialization_and_configuration_failures_are_absent",
@@ -2632,6 +2662,40 @@ def check_m15_blynk_contract(failures: CheckFailures) -> None:
         and "internal_ota_correlation_id = 0xFFFFFFFEU" in runtime_header
         and "reserved_id(value)" in runtime_support,
         "HTTP/Blynk IDs must share atomic nonzero wrap-safe generators and skip internal OTA",
+    )
+
+    command_admission = source_section(
+        service,
+        "if (mapped.command) {",
+        "if (mapped.firmware_operation == BlynkFirmwareOperation::None)",
+    )
+    result_reservation = command_admission.find("results_.track(correlation)")
+    capacity_rejection = command_admission.find("if (!result_reserved && !stop)")
+    mailbox_push = command_admission.find("application_mailbox_.push(")
+    failures.require(
+        result_reservation >= 0
+        and capacity_rejection > result_reservation
+        and mailbox_push > capacity_rejection
+        and "std::holds_alternative<app::StopSessionCommand>" in command_admission
+        and "results_.cancel(correlation)" in command_admission
+        and "results_.resolve_service_result(correlation, false)" in command_admission
+        and "if (!recorded)" in command_admission
+        and "remote stop queued; confirmation unavailable" in command_admission,
+        "Blynk must reserve results before ordinary command admission, preserve Stop at saturation, and resolve or cancel reservations explicitly",
+    )
+    firmware_admission = source_section(
+        service,
+        "if (mapped.firmware_operation == BlynkFirmwareOperation::None)",
+        "void observe_snapshot(",
+    )
+    firmware_reservation = firmware_admission.find("if (!results_.track(correlation))")
+    failures.require(
+        firmware_reservation >= 0
+        and firmware_admission.find("firmware_updates_.request_check()") > firmware_reservation
+        and firmware_admission.find("firmware_updates_.request_install(") > firmware_reservation
+        and firmware_admission.count("results_.resolve_service_result(") == 2
+        and "results_.record_service_result(" not in firmware_admission,
+        "Blynk firmware operations must reserve feedback before side effects and explicitly resolve service outcomes",
     )
 
     failures.require(

@@ -94,14 +94,21 @@ struct BlynkCommandFeedback final {
     BlynkCommandResultKind kind{BlynkCommandResultKind::SemanticRejected};
 };
 
-// Only IDs explicitly admitted from Blynk may be projected from the shared
-// application result history. Disconnect drops both pending IDs and feedback.
+// A tracked ID reserves one slot before its action is admitted. Resolving the
+// ID moves that reservation into feedback, so a full outbound backlog cannot
+// make the semantic result depend on later snapshot retention. Disconnect
+// drops both reservations and feedback.
 class BlynkCommandResults final {
 public:
     static constexpr std::size_t capacity = app::command_result_capacity;
 
     [[nodiscard]] bool track(std::uint32_t correlation_id) noexcept;
+    [[nodiscard]] bool cancel(std::uint32_t correlation_id) noexcept;
     void observe(std::span<const app::CommandResultView> results) noexcept;
+    [[nodiscard]] bool resolve_service_result(
+        std::uint32_t correlation_id,
+        bool accepted
+    ) noexcept;
     [[nodiscard]] bool record_service_result(
         std::uint32_t correlation_id,
         bool accepted
@@ -112,6 +119,7 @@ public:
 
 private:
     [[nodiscard]] bool enqueue(BlynkCommandFeedback feedback) noexcept;
+    [[nodiscard]] bool resolve_tracked(BlynkCommandFeedback feedback) noexcept;
 
     std::array<std::uint32_t, capacity> pending_{};
     std::size_t pending_count_{0U};

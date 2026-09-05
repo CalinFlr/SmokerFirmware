@@ -295,6 +295,48 @@ void test_max31865_temperature_validity_accepts_boundaries_and_rejects_outside()
     assert(!sensor.read().has_value());
 }
 
+void test_max31865_bootstrap_wait_covers_every_tick_phase()
+{
+    using smoker::platform::Max31865FilterFrequency;
+    constexpr std::array filters{
+        Max31865FilterFrequency::Hz50, Max31865FilterFrequency::Hz60,
+    };
+    constexpr std::array tick_rates{100U, 1'000U, 1'024U};
+    // Exact fractions of a tick also model rates whose period is not an
+    // integral number of microseconds. At 100 Hz each phase step is 1 us.
+    constexpr std::uint64_t phase_units_per_tick = 10'000U;
+
+    for (const auto filter : filters) {
+        const auto boundary =
+            smoker::platform::max31865_maximum_first_conversion_time(filter);
+        const auto boundary_ms = static_cast<std::uint32_t>(boundary.count());
+        for (const auto tick_rate : tick_rates) {
+            const auto wait_ticks = smoker::platform::max31865_bootstrap_delay_ticks(
+                boundary_ms, tick_rate
+            );
+            for (std::uint64_t phase = 0U; phase < phase_units_per_tick; ++phase) {
+                // FreeRTOS wakes at current_tick + delay_ticks, independently
+                // of how far the caller has progressed into current_tick.
+                const auto elapsed_units = wait_ticks * phase_units_per_tick - phase;
+                const auto units_per_second = tick_rate * phase_units_per_tick;
+                assert(elapsed_units * 1'000U >= boundary_ms * units_per_second);
+
+                FakeMonotonicClock clock;
+                smoker::platform::Max31865ReadinessPolicy readiness{filter, clock};
+                readiness.continuous_configuration_applied();
+                assert(!readiness.sample_ready());
+                // EspMonotonicClock exposes whole milliseconds, rounded down.
+                clock.advance(smoker::core::Duration{
+                    static_cast<smoker::core::Duration::rep>(
+                        elapsed_units * 1'000U / units_per_second
+                    ),
+                });
+                assert(readiness.sample_ready());
+            }
+        }
+    }
+}
+
 void test_max31865_60_hz_first_conversion_boundary()
 {
     using namespace std::chrono_literals;
@@ -766,6 +808,7 @@ int main()
     test_max31865_configuration_policy_requires_explicit_valid_values();
     test_max31865_temperature_validity_policy_is_finite_ordered_and_inclusive();
     test_max31865_temperature_validity_accepts_boundaries_and_rejects_outside();
+    test_max31865_bootstrap_wait_covers_every_tick_phase();
     test_max31865_60_hz_first_conversion_boundary();
     test_max31865_50_hz_first_conversion_boundary();
     test_max31865_initialization_and_configuration_failures_are_absent();

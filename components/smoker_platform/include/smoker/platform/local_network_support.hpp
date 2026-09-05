@@ -273,6 +273,25 @@ private:
     bool configuration_apply_pending_{false};
 };
 
+inline constexpr std::int64_t captive_dns_shutdown_timeout_microseconds = 400'000;
+
+// The event-loop owner must block for a real RTOS tick so the lower-priority
+// DNS worker can exit. A monotonic deadline bounds retries independently of
+// tick frequency; the final sleep can cross it by at most one tick plus
+// scheduler latency. Callbacks keep this exact wait testable on the host.
+template <typename Clock, typename ExitPending, typename DelayTicks>
+void wait_for_captive_dns_shutdown(
+    const Clock& now_microseconds,
+    const ExitPending& exit_pending,
+    const DelayTicks& delay_ticks
+) noexcept
+{
+    const auto deadline = now_microseconds() + captive_dns_shutdown_timeout_microseconds;
+    while (exit_pending() && now_microseconds() < deadline) {
+        delay_ticks(1U);
+    }
+}
+
 enum class DnsResponseStatus : std::uint8_t {
     Answer,
     NoAnswer,

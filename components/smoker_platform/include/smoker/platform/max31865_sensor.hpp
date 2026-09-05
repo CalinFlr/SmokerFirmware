@@ -53,6 +53,19 @@ struct Max31865TemperatureValidityPolicy final {
         : std::chrono::milliseconds{66};
 }
 
+// Positive startup interval and tick rate. vTaskDelay() consumes the current
+// partial tick first, so reserve one tick in addition to rounding up the full
+// conversion interval. The caller checks that the result fits its tick type.
+[[nodiscard]] constexpr std::uint64_t max31865_bootstrap_delay_ticks(
+    const std::uint32_t boundary_milliseconds,
+    const std::uint32_t ticks_per_second
+) noexcept
+{
+    const auto scaled_interval =
+        static_cast<std::uint64_t>(boundary_milliseconds) * ticks_per_second;
+    return (scaled_interval + 999U) / 1'000U + 1U;
+}
+
 // Descriptor/configuration success does not make the RTD registers fresh.
 // This allocation-free policy applies the official filter-dependent maximum
 // first-conversion interval after each successful continuous configuration.

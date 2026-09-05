@@ -29,6 +29,7 @@
 
 #include <array>
 #include <chrono>
+#include <limits>
 #include <memory>
 #include <new>
 #include <optional>
@@ -156,16 +157,17 @@ public:
 {
     const auto boundary = clock.now()
         + max31865_production_configuration.first_sample_boundary;
-    const auto boundary_milliseconds =
+    constexpr auto boundary_milliseconds =
         max31865_production_configuration.first_sample_boundary.count();
-    if (boundary_milliseconds <= 0) return false;
+    static_assert(boundary_milliseconds > 0);
 
-    // CONFIG_FREERTOS_HZ is currently 100, so pdMS_TO_TICKS(66) truncates to
-    // 60 ms. One additional tick makes this a bounded >=66 ms startup wait.
-    const auto wait_ticks = static_cast<TickType_t>(
-        pdMS_TO_TICKS(static_cast<std::uint32_t>(boundary_milliseconds)) + 1U
+    // At 100 Hz the 66 ms boundary needs eight ticks: seven full ticks plus
+    // the possibly almost-completed tick in which vTaskDelay() is entered.
+    constexpr auto wait_ticks = max31865_bootstrap_delay_ticks(
+        static_cast<std::uint32_t>(boundary_milliseconds), configTICK_RATE_HZ
     );
-    vTaskDelay(wait_ticks);
+    static_assert(wait_ticks <= std::numeric_limits<TickType_t>::max());
+    vTaskDelay(static_cast<TickType_t>(wait_ticks));
     return clock.now() >= boundary;
 }
 
