@@ -816,16 +816,76 @@ void test_results_and_events_are_separate_and_not_replayed()
 
     smoker::platform::BlynkCommandResults backed_up_results;
     for (std::uint32_t id = 1U;
-         id <= smoker::platform::BlynkCommandResults::capacity; ++id) {
+         id < smoker::platform::BlynkCommandResults::capacity; ++id) {
         assert(backed_up_results.record_service_result(id, true));
     }
     assert(backed_up_results.track(100U));
     const std::array semantic{smoker::app::CommandResultView{100U, true}};
     backed_up_results.observe(semantic);
-    assert(backed_up_results.pending_count() == 1U);
-    assert(backed_up_results.pop());
-    backed_up_results.observe(semantic);
     assert(backed_up_results.pending_count() == 0U);
+    assert(!backed_up_results.track(101U));
+    const std::array overwritten_snapshot{
+        smoker::app::CommandResultView{101U, false}
+    };
+    backed_up_results.observe(overwritten_snapshot);
+    bool found_semantic_feedback = false;
+    for (std::size_t index = 0U;
+         index < smoker::platform::BlynkCommandResults::capacity; ++index) {
+        const auto queued = backed_up_results.pop();
+        assert(queued);
+        if (queued->correlation_id == 100U) {
+            found_semantic_feedback = true;
+            assert(queued->kind
+                == smoker::platform::BlynkCommandResultKind::SemanticAccepted);
+        }
+    }
+    assert(found_semantic_feedback);
+    assert(!backed_up_results.pop());
+
+    // A reservation can always become feedback, even with every other fixed
+    // slot occupied. The result no longer has to survive in later snapshots.
+    assert(backed_up_results.track(200U));
+    for (std::uint32_t id = 1U;
+         id < smoker::platform::BlynkCommandResults::capacity; ++id) {
+        assert(backed_up_results.record_service_result(id, true));
+    }
+    assert(!backed_up_results.record_service_result(201U, true));
+    assert(!backed_up_results.track(201U));
+    assert(backed_up_results.resolve_service_result(200U, false));
+    assert(backed_up_results.pending_count() == 0U);
+    for (std::uint32_t id = 1U;
+         id < smoker::platform::BlynkCommandResults::capacity; ++id) {
+        const auto earlier_service = backed_up_results.pop();
+        assert(earlier_service && earlier_service->correlation_id == id);
+        assert(earlier_service->kind
+            == smoker::platform::BlynkCommandResultKind::ServiceAccepted);
+    }
+    const auto rejected_service = backed_up_results.pop();
+    assert(rejected_service && rejected_service->correlation_id == 200U);
+    assert(rejected_service->kind
+        == smoker::platform::BlynkCommandResultKind::ServiceRejected);
+    assert(!backed_up_results.pop());
+
+    assert(backed_up_results.track(201U));
+    assert(backed_up_results.cancel(201U));
+    assert(!backed_up_results.cancel(201U));
+    assert(backed_up_results.pending_count() == 0U);
+
+    for (std::uint32_t id = 1U;
+         id <= smoker::platform::BlynkCommandResults::capacity; ++id) {
+        assert(backed_up_results.record_service_result(id, true));
+    }
+    assert(!backed_up_results.record_service_result(999U, false));
+    assert(!backed_up_results.track(999U));
+    backed_up_results.disconnected();
+    assert(backed_up_results.track(999U));
+    const std::array after_reconnect{
+        smoker::app::CommandResultView{999U, true}
+    };
+    backed_up_results.observe(after_reconnect);
+    const auto after_reconnect_feedback = backed_up_results.pop();
+    assert(after_reconnect_feedback
+        && after_reconnect_feedback->correlation_id == 999U);
 
     smoker::platform::BlynkEventScheduler events;
     events.queue(smoker::platform::BlynkEventType::Alarm, "first");

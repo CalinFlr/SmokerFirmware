@@ -54,6 +54,19 @@ Test names below refer to functions in `tests/host/smoker_core_tests.cpp`,
 `tests/host/smoker_m14_tests.cpp`, and `tests/host/smoker_m15_tests.cpp`. All
 host test groups are registered in `tests/CMakeLists.txt`.
 
+## ESP architect review regressions
+
+These are local corrections within the existing milestones. Their host/build
+evidence does not extend the target or hardware sign-offs below.
+
+| Contract | Implementation evidence | Regression evidence | Validation |
+|---|---|---|---|
+| MAX31865 bootstrap covers the entire first-conversion interval at every RTOS tick phase | `max31865_bootstrap_delay_ticks()` rounds upward and adds the partial-tick allowance; ordinary startup uses it and retains the monotonic deadline check | `test_max31865_bootstrap_wait_covers_every_tick_phase` covers 55/66 ms, three tick rates, and 10,000 phases per tick; runtime wiring guardrail | Host scheduler model and cross-build; connected boot timing pending |
+| Fault acknowledgement does not extend a terminated session | `ClearResolvedFaultCommand` preserves the existing `stopped_at` | `test_m4_fault_clear_preserves_session_elapsed` covers invalid/over-temperature faults, both snapshots, frozen timer, and explicit restart | Host and cross-build; no physical heating claim |
+| Restored disabled defaults invalidate pre-Start readings | `reset_probe_session_configuration()` clears disabled-probe readings and timer input before evaluation | `test_m5_new_session_disabled_probe_cannot_start_timer` covers two sessions, delayed fresh input, StopSession timer, unaffected probes/control, and heap-quiet Start | Host and cross-build |
+| Blynk feedback backlog cannot strand an already observed tracked result | shared reservation/feedback capacity and reserve-before-admission; tracked service rejections retain their reserved slot; Stop remains admissible with explicit capacity feedback | `test_results_and_events_are_separate_and_not_replayed` covers saturation, snapshot overwrite, service result, cancellation, and reconnect; target admission/Stop wiring guardrail | Host and cross-build; live backlog/reconnect pending |
+| Captive DNS shutdown blocks long enough for its lower-priority worker without converting 400 ms into 400 ticks | `wait_for_captive_dns_shutdown()` uses one actual tick and a monotonic 400 ms exit-wait deadline; task storage is reaped only after exit | `test_captive_dns_shutdown_wait` covers phase, absent/exited worker, 250 ms receive cleanup, and timeout; target wiring guardrail | Host scheduler model and cross-build; rapid AP transitions pending |
+
 ## Business rules
 
 | Rule | Milestone/status | Implementation evidence | Test/evidence | Validation |

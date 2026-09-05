@@ -26,6 +26,7 @@
 #include <optional>
 #include <string_view>
 #include <utility>
+#include <variant>
 
 namespace smoker::platform {
 namespace {
@@ -463,26 +464,66 @@ private:
             if (mapped.decision != BlynkCommandDecision::Accepted) continue;
             if (mapped.command) {
                 const auto correlation = ids_.next_correlation();
+                const bool stop = std::holds_alternative<app::StopSessionCommand>(
+                    *mapped.command
+                );
+                const bool result_reserved = results_.track(correlation);
+                if (!result_reserved && !stop) {
+                    events_.queue(
+                        BlynkEventType::RemoteError,
+                        "remote result capacity exhausted"
+                    );
+                    continue;
+                }
+                if (!connection_boundary_.usable(connection)) {
+                    if (result_reserved) {
+                        static_cast<void>(results_.cancel(correlation));
+                    }
+                    break;
+                }
                 const auto admission = application_mailbox_.push(
                     std::move(*mapped.command), correlation,
                     connection.connection_generation
                 );
-                if (admission == app::MailboxAdmission::Accepted) {
-                    if (!results_.track(correlation)) {
-                        events_.queue(BlynkEventType::RemoteError, "remote result capacity exhausted");
+                if (admission != app::MailboxAdmission::Accepted) {
+                    const bool recorded = result_reserved
+                        ? results_.resolve_service_result(correlation, false)
+                        : results_.record_service_result(correlation, false);
+                    if (!recorded) {
+                        events_.queue(
+                            BlynkEventType::RemoteError,
+                            "remote result capacity exhausted"
+                        );
                     }
-                } else {
-                    static_cast<void>(results_.record_service_result(correlation, false));
                     events_.queue(BlynkEventType::RemoteError, "remote application mailbox saturated");
+                } else if (!result_reserved) {
+                    // Stop retains its reserved transport admission even when
+                    // auxiliary result feedback has no remaining capacity.
+                    events_.queue(
+                        BlynkEventType::RemoteError,
+                        "remote stop queued; confirmation unavailable"
+                    );
                 }
                 continue;
             }
             if (mapped.firmware_operation == BlynkFirmwareOperation::None) continue;
             const auto correlation = ids_.next_correlation();
+            if (!results_.track(correlation)) {
+                events_.queue(
+                    BlynkEventType::RemoteError,
+                    "remote result capacity exhausted"
+                );
+                continue;
+            }
             if (mapped.firmware_operation == BlynkFirmwareOperation::Check) {
-                static_cast<void>(results_.record_service_result(
-                    correlation, firmware_updates_.request_check()
-                ));
+                if (!results_.resolve_service_result(
+                        correlation, firmware_updates_.request_check()
+                    )) {
+                    events_.queue(
+                        BlynkEventType::RemoteError,
+                        "remote result tracking failed"
+                    );
+                }
                 continue;
             }
             const auto status = firmware_updates_.status();
@@ -491,12 +532,12 @@ private:
                 : firmware_updates_.request_install(
                     status.available_version.data(), correlation
                 );
-            if (admission == FirmwareInstallAdmission::Accepted) {
-                if (!results_.track(correlation)) {
-                    events_.queue(BlynkEventType::RemoteError, "remote result capacity exhausted");
-                }
-            } else {
-                static_cast<void>(results_.record_service_result(correlation, false));
+            if (admission != FirmwareInstallAdmission::Accepted
+                && !results_.resolve_service_result(correlation, false)) {
+                events_.queue(
+                    BlynkEventType::RemoteError,
+                    "remote result tracking failed"
+                );
             }
         }
     }

@@ -177,6 +177,9 @@ the complete exact `0xD1` byte, then waits at least the documented 66 ms first
 boundary does ownership transfer to the sole `ControlTask`. The task calls
 `SmokerApplication::tick()` at its existing cadence; safety evaluation remains
 synchronous before the only, still-simulated heater write.
+The startup delay rounds the interval upward to RTOS ticks and adds one tick
+for the caller's partial current tick: 66 ms at 100 Hz therefore uses eight
+ticks. A final monotonic comparison retains the existing failure path.
 
 SPI-bus/pull setup, descriptor/configuration, or first-boundary failure leaves
 the chamber adapter permanently unavailable until reboot but does not suppress
@@ -614,6 +617,8 @@ rejected. Installation permission cannot be obtained during `RUNNING`.
 
 M14 adds `session_elapsed` to both snapshot forms. It is computed from monotonic
 session points by `SmokerApplication`; history never derives duration from UTC.
+Clearing a resolved fault preserves the stop point recorded when that fault
+ended the session; acknowledgement cannot extend the recorded duration.
 
 Control-dependent HTTP routes begin not-ready and retain their existing `503`
 behavior until the owning `ControlTask` publishes a one-shot readiness
@@ -640,6 +645,9 @@ active-session settings. `SetProbeTarget`, `SetProbeEnabled`, and
 copies scalar defaults into fresh session settings without modifying saved
 configuration or allocating in the critical cycle. Persisting defaults and
 active-session recovery state remains M10 work.
+When those defaults disable a probe, Start also discards its pre-command
+reading from the snapshot and timer inputs, even if the previous session had
+enabled that probe.
 
 A not-yet-started `ProbeTemperatureAtLeast` timer treats a disabled,
 disconnected, or invalid selected probe as having no reading and continues to
@@ -834,6 +842,11 @@ offered through AP. DNS failure is a logged degradation to manual IP access. On 
 the static DNS worker closes its socket, signals exit, and suspends; only the
 core-0 owner deletes it and releases its static stack/control block before a
 later AP start may reuse that storage.
+Shutdown waits in actual one-tick blocks so the lower-priority DNS worker can
+run, with a 400 ms monotonic deadline for the exit wait. The final block may
+cross that deadline by one tick plus scheduler latency; this is not a hardware
+WCET claim for socket shutdown/close. A worker that has not exited is never
+deleted or reused by the timeout path.
 
 `espressif/cjson` supplies JSON parsing/serialization and `espressif/mdns`
 supplies discovery without a display. Registry versions and hashes are locked;
@@ -1042,6 +1055,17 @@ Correlated command results and configured Blynk events use separate bounded
 messages and may publish immediately. They do not mutate the cached projection
 or force an unchanged batch. Publish failure leaves the newest projection dirty
 for a later connected attempt but never blocks or feeds back into control.
+Pending result reservations and queued feedback share a 16-entry capacity.
+Ordinary remote commands and firmware requests reserve their result before
+admission; saturation rejects further ordinary work with a remote error.
+Observing a tracked semantic result consumes its reservation and retains the
+complete feedback immediately, so a later snapshot overwrite cannot lose an
+already observed result. Firmware service rejections use the same reservation.
+Stop remains admissible through its existing transport path even when result
+capacity is exhausted; that case emits an explicit remote error about the
+unavailable confirmation and leaves no unresolvable pending ID. The existing
+single outbound retry candidate remains separately bounded, and disconnect
+clears reservations, queued feedback, and that candidate.
 
 Control datastreams are edge-triggered transport inputs. The adapter does not
 request, replay, or synchronize saved Start or OTA-install values after a

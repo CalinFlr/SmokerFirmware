@@ -218,8 +218,10 @@ private:
 
 class Fixture final {
 public:
-    Fixture()
-        : probes{probe_configuration()}
+    explicit Fixture(
+        const std::array<FoodProbeConfig, 2U>& configuration = probe_configuration()
+    )
+        : probes{configuration}
         , chamber{temperature(20.0F)}
         , food_source{probes}
         , chamber_controller{}
@@ -569,6 +571,73 @@ void test_m4_invalid_and_latched_fault(TestContext& context)
             && fixture.heater.last_demand().percent() == 100.0F,
         "M4: heating resumes only after a new explicit Start"
     );
+}
+
+void test_m4_fault_clear_preserves_session_elapsed(TestContext& context)
+{
+    const std::array<std::optional<Temperature>, 2U> fault_readings{
+        std::nullopt, temperature(151.0F),
+    };
+    for (const auto fault_reading : fault_readings) {
+        Fixture fixture;
+        fixture.clock.advance(5s);
+        context.expect(
+            fixture.start(recipe(100.0F, timer(60s, immediate()))),
+            "M4: timed session for delayed fault clear is queued"
+        );
+        fixture.application.tick();
+
+        fixture.clock.advance(10s);
+        fixture.chamber.set_reading(fault_reading);
+        fixture.application.tick();
+        const auto faulted = fixture.application.snapshot();
+        context.expect(
+            faulted.session_status == SessionStatus::Fault
+                && faulted.stop_reason == StopReason::Fault
+                && faulted.session_elapsed == 10s && faulted.timer.elapsed == 10s
+                && fixture.heater.last_demand().percent() == 0.0F,
+            "M4: sensor and over-temperature faults stop elapsed time at the fault cycle"
+        );
+
+        fixture.clock.advance(90s);
+        fixture.chamber.set_reading(temperature(20.0F));
+        context.expect(
+            fixture.application.submit(ClearResolvedFaultCommand{}),
+            "M4: delayed resolved-fault clear is queued"
+        );
+        fixture.application.tick();
+        const auto cleared = fixture.application.snapshot();
+        context.expect(
+            cleared.session_status == SessionStatus::Stopped && !cleared.active_fault
+                && cleared.stop_reason == StopReason::Fault
+                && cleared.session_elapsed == 10s && cleared.timer.elapsed == 10s
+                && fixture.application.snapshot_view().session_elapsed == 10s
+                && fixture.heater.last_demand().percent() == 0.0F,
+            "M4: fault clear preserves the original session duration in both snapshots"
+        );
+
+        fixture.clock.advance(30s);
+        fixture.application.tick();
+        context.expect(
+            fixture.application.snapshot_view().session_elapsed == 10s
+                && fixture.application.snapshot_view().timer.elapsed == 10s
+                && fixture.heater.last_demand().percent() == 0.0F,
+            "M4: cleared session and timer remain frozen on later cycles"
+        );
+
+        context.expect(
+            fixture.start(recipe(100.0F, timer(60s, immediate())), 2U),
+            "M4: explicit new session after delayed clear is queued"
+        );
+        fixture.application.tick();
+        const auto restarted = fixture.application.snapshot_view();
+        context.expect(
+            restarted.session_status == SessionStatus::Running
+                && restarted.session_elapsed == 0s && restarted.timer.elapsed == 0s
+                && fixture.heater.last_demand().percent() == 100.0F,
+            "M4: only an explicit new Start resets elapsed time and permits heating"
+        );
+    }
 }
 
 void test_m4_over_temperature_and_limits(TestContext& context)
@@ -1314,6 +1383,102 @@ void test_m5_alarm_lifecycle_and_probe_defaults(TestContext& context)
     }
 }
 
+void test_m5_new_session_disabled_probe_cannot_start_timer(TestContext& context)
+{
+    auto configuration = probe_configuration();
+    configuration[1].enabled = false;
+    Fixture fixture{configuration};
+    static_cast<void>(fixture.food_source.set_reading(2U, temperature(75.0F)));
+    context.expect(
+        fixture.start(recipe(100.0F), 301U),
+        "M5: first session with a default-disabled probe is queued"
+    );
+    fixture.application.tick();
+    context.expect(
+        fixture.application.submit(SetProbeEnabledCommand{2U, true}),
+        "M5: live enable of the default-disabled probe is queued"
+    );
+    fixture.application.tick();
+    fixture.application.tick();
+    context.expect(
+        fixture.application.snapshot_view().probes[1].current_temperature
+            == temperature(75.0F),
+        "M5: first session samples the enabled probe above the later timer threshold"
+    );
+
+    context.expect(
+        fixture.application.submit(StopSessionCommand{}),
+        "M5: first session Stop is queued before restoring probe defaults"
+    );
+    fixture.application.tick();
+    fixture.events.clear();
+    context.expect(
+        fixture.start(
+            recipe(100.0F, timer(2s, probe_at(2U, 70.0F), TimerCompletionAction::StopSession)),
+            302U
+        ),
+        "M5: second session restores disabled defaults before its probe timer"
+    );
+    allocation_probe::begin();
+    fixture.application.tick();
+    const auto start_counts = allocation_probe::end();
+    const auto restarted = fixture.application.snapshot();
+    context.expect(
+        !restarted.probes[1].enabled && !restarted.probes[1].current_temperature
+            && !fixture.application.snapshot_view().probes[1].current_temperature
+            && !restarted.timer.started
+            && !has_event(fixture.events.events(), EventType::TimerStarted),
+        "M5: disabled defaults discard the pre-Start sample from snapshots and timer input"
+    );
+    context.expect(
+        restarted.probes[0].enabled
+            && restarted.probes[0].current_temperature == temperature(20.0F)
+            && restarted.session_status == SessionStatus::Running
+            && fixture.heater.last_demand().percent() == 100.0F
+            && start_counts.allocations == 0U && start_counts.deallocations == 0U,
+        "M5: restoring disabled defaults preserves other probes, control, and heap-quiet Start"
+    );
+
+    fixture.clock.advance(3s);
+    fixture.application.tick();
+    context.expect(
+        !fixture.application.snapshot_view().timer.started
+            && fixture.application.snapshot_view().session_status == SessionStatus::Running
+            && fixture.heater.last_demand().percent() == 100.0F,
+        "M5: a disabled probe cannot prematurely complete a STOP_SESSION timer"
+    );
+    context.expect(
+        fixture.application.submit(SetProbeEnabledCommand{2U, true}),
+        "M5: second-session probe re-enable is queued"
+    );
+    fixture.application.tick();
+    context.expect(
+        !fixture.application.snapshot_view().timer.started,
+        "M5: re-enable still waits for a later sampled reading"
+    );
+    static_cast<void>(fixture.food_source.set_reading(2U, temperature(65.0F)));
+    fixture.application.tick();
+    context.expect(
+        !fixture.application.snapshot_view().timer.started,
+        "M5: a fresh below-threshold sample cannot reuse the previous session's hot reading"
+    );
+    static_cast<void>(fixture.food_source.set_reading(2U, temperature(75.0F)));
+    fixture.application.tick();
+    context.expect(
+        fixture.application.snapshot_view().timer.started,
+        "M5: a fresh enabled sample at threshold starts the waiting timer"
+    );
+    fixture.clock.advance(2s);
+    fixture.application.tick();
+    const auto completed = fixture.application.snapshot_view();
+    context.expect(
+        completed.timer.completed && completed.session_status == SessionStatus::Stopped
+            && completed.stop_reason == StopReason::TimerCompleted
+            && fixture.heater.last_demand().percent() == 0.0F,
+        "M5: the correctly triggered timer retains STOP_SESSION behavior"
+    );
+}
+
 void test_m5_bounded_event_sink(TestContext& context)
 {
     smoker::platform::SimulatedEventSink sink;
@@ -1630,6 +1795,7 @@ int main(const int argc, const char* const argv[])
     }
     if (group == "m4" || group == "all") {
         test_m4_invalid_and_latched_fault(context);
+        test_m4_fault_clear_preserves_session_elapsed(context);
         test_m4_over_temperature_and_limits(context);
     }
     if (group == "m5" || group == "all") {
@@ -1641,6 +1807,7 @@ int main(const int argc, const char* const argv[])
         test_p0_stop_coalescing_preserves_fifo_intent(context);
         test_p0_cr_005_heating_state_invariants(context);
         test_m5_alarm_lifecycle_and_probe_defaults(context);
+        test_m5_new_session_disabled_probe_cannot_start_timer(context);
         test_m5_bounded_event_sink(context);
         test_m5_validation_queue_and_combined_order(context);
         test_m5_command_result_correlation(context);

@@ -470,7 +470,7 @@ void SmokerApplication::process(
     active_fault_.reset();
     if (session_ && session_->status == core::SessionStatus::Fault) {
         session_->status = core::SessionStatus::Stopped;
-        session_->stopped_at = now;
+        // The fault ended this session; acknowledgement does not extend it.
         session_->stop_reason = core::StopReason::Fault;
     }
     emit(core::EventType::FaultAcknowledged, now, std::nullopt, std::nullopt, acknowledged_code);
@@ -578,10 +578,18 @@ bool SmokerApplication::trailing_stop_is_pending() const noexcept
 
 void SmokerApplication::reset_probe_session_configuration() noexcept
 {
-    for (auto& probe : probes_) {
+    for (std::size_t index = 0U; index < probes_.size(); ++index) {
+        auto& probe = probes_[index];
         probe.session_target_temperature = probe.default_configuration.target_temperature;
         probe.session_enabled = probe.default_configuration.enabled;
         probe.session_alarm_enabled = probe.default_configuration.alarm_enabled;
+        if (!probe.session_enabled) {
+            // Raw acquisition preceded Start and may have sampled this probe
+            // under the previous session's live configuration.
+            probe.current_temperature.reset();
+            probe.reading_sampled = false;
+            probe_readings_[index].temperature.reset();
+        }
     }
 }
 

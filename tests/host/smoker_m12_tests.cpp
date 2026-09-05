@@ -870,6 +870,92 @@ void test_wifi_scan_transitions(TestContext& context)
     );
 }
 
+void test_captive_dns_shutdown_wait(TestContext& context)
+{
+    using smoker::platform::wait_for_captive_dns_shutdown;
+    constexpr std::int64_t tick_microseconds = 10'000; // Production: 100 Hz.
+
+    // Model the priority relationship: sys_evt can only let the lower-priority
+    // DNS worker finish when it blocks, not when it calls vTaskDelay(0).
+    for (const auto phase : {0LL, 1LL, 5'000LL, 9'999LL}) {
+        std::int64_t now = phase;
+        bool task_present = true;
+        bool exited = false;
+        std::uint32_t blocking_delays = 0U;
+        wait_for_captive_dns_shutdown(
+            [&]() noexcept { return now; },
+            [&]() noexcept { return task_present && !exited; },
+            [&](const std::uint32_t ticks) noexcept {
+                context.require(ticks == 1U, "DNS shutdown blocks for one actual tick");
+                if (ticks == 0U) std::abort(); // A zero-tick wait cannot make progress.
+                now = (now / tick_microseconds + ticks) * tick_microseconds;
+                ++blocking_delays;
+                exited = true;
+            }
+        );
+        context.require(
+            exited && blocking_delays == 1U,
+            "DNS worker exits during the stop handler before a consecutive AP start"
+        );
+        context.require(
+            task_present,
+            "DNS wait leaves task deletion and static-storage ownership to its caller"
+        );
+        const auto completed_at = now;
+        wait_for_captive_dns_shutdown(
+            [&]() noexcept { return now; },
+            [&]() noexcept { return task_present && !exited; },
+            [&](const std::uint32_t) noexcept { ++blocking_delays; }
+        );
+        task_present = false;
+        exited = false;
+        wait_for_captive_dns_shutdown(
+            [&]() noexcept { return now; },
+            [&]() noexcept { return task_present && !exited; },
+            [&](const std::uint32_t) noexcept { ++blocking_delays; }
+        );
+        context.require(
+            now == completed_at && blocking_delays == 1U,
+            "DNS shutdown does not wait for an exited or absent task"
+        );
+    }
+
+    // A worker stuck in receive can take its configured 250 ms timeout to
+    // observe shutdown. It must get that time, while a stuck worker must not
+    // turn the old 400-iteration count into four seconds of event-loop delay.
+    for (const bool worker_finishes : {true, false}) {
+        std::int64_t now = 9'999;
+        const auto started_at = now;
+        const auto worker_exit_at = now + 250'000;
+        bool exited = false;
+        std::uint32_t blocking_delays = 0U;
+        wait_for_captive_dns_shutdown(
+            [&]() noexcept { return now; },
+            [&]() noexcept { return !exited; },
+            [&](const std::uint32_t ticks) noexcept {
+                context.require(ticks == 1U, "DNS deadline wait keeps each delay to one tick");
+                if (ticks == 0U) std::abort();
+                now = (now / tick_microseconds + ticks) * tick_microseconds;
+                ++blocking_delays;
+                exited = worker_finishes && now >= worker_exit_at;
+            }
+        );
+        const auto elapsed = now - started_at;
+        if (worker_finishes) {
+            context.require(
+                exited && elapsed >= 250'000 && elapsed < 260'000,
+                "DNS shutdown gives receive-timeout cleanup an actual scheduling opportunity"
+            );
+        } else {
+            context.require(
+                !exited && elapsed >= 400'000 && elapsed < 410'000
+                    && blocking_delays <= 41U,
+                "DNS shutdown stops retrying at 400 ms without claiming worker exit"
+            );
+        }
+    }
+}
+
 std::array<std::uint8_t, 31U> dns_query(const std::uint16_t type)
 {
     std::array<std::uint8_t, 31U> query{
@@ -949,6 +1035,7 @@ int main()
     test_wifi_scan_transitions(context);
     test_wifi_fallback_deadline(context);
     test_wifi_sta_retry_state(context);
+    test_captive_dns_shutdown_wait(context);
     test_captive_dns_parser(context);
     if (context.failures == 0) {
         std::puts("M12 transport tests: PASS");

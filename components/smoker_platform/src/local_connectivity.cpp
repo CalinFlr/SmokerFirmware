@@ -1140,12 +1140,16 @@ private:
             static_cast<void>(shutdown(socket, SHUT_RDWR));
             static_cast<void>(close(socket));
         }
-        for (std::size_t attempt = 0U;
-             attempt < 400U && !dns_task_exited_.load(std::memory_order_acquire)
-                 && dns_task_.load(std::memory_order_acquire) != nullptr;
-             ++attempt) {
-            vTaskDelay(pdMS_TO_TICKS(1U));
-        }
+        wait_for_captive_dns_shutdown(
+            []() noexcept { return esp_timer_get_time(); },
+            [this]() noexcept {
+                return !dns_task_exited_.load(std::memory_order_acquire)
+                    && dns_task_.load(std::memory_order_acquire) != nullptr;
+            },
+            [](const std::uint32_t ticks) noexcept {
+                vTaskDelay(static_cast<TickType_t>(ticks));
+            }
+        );
         reap_exited_dns_task();
         if (dns_task_.load(std::memory_order_acquire) != nullptr) {
             ESP_LOGW(tag, "Captive DNS stop timed out; static storage will not be reused");

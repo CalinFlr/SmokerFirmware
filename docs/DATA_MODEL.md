@@ -229,6 +229,8 @@ struct Session {
 M5 stores monotonic session points because no wall clock exists yet. A future
 display/audit timestamp is additional data and must never replace monotonic
 duration calculation.
+Once a fault ends the session, its `stoppedAt` remains the original fault stop
+point when the resolved fault is acknowledged and the status becomes `STOPPED`.
 
 ## HeaterDemand
 
